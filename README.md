@@ -228,7 +228,7 @@ agents/
 
 ### Prerequisites
 
-You are welcome to swap any of the below calls, e.g. [WhisperX](https://docs.pixeltable.com/docs/examples/search/audio) instead of OpenAI Whisper, [Llama.cpp](https://docs.pixeltable.com/docs/integrations/frameworks#local-llm-runtimes) instead of Mistral... either through our built-in modules or by bringing your own models, frameworks, and API calls. See our [integration](https://docs.pixeltable.com/docs/integrations/frameworks) and [UDFs](https://docs.pixeltable.com/docs/datastore/custom-functions) pages to learn more. You can easily make this applicaiton entirely local if you decide to rely on local LLM runtimes and local embedding/transcription solutions.
+You are welcome to swap any of the below calls, e.g. [WhisperX](https://docs.pixeltable.com/docs/examples/search/audio) instead of OpenAI Whisper, [Llama.cpp](https://docs.pixeltable.com/docs/integrations/frameworks#local-llm-runtimes) instead of Mistral... either through our built-in modules or by bringing your own models, frameworks, and API calls. See our [integration](https://docs.pixeltable.com/docs/integrations/frameworks) and [UDFs](https://docs.pixeltable.com/docs/datastore/custom-functions) pages to learn more. You can easily make this application entirely local if you decide to rely on local LLM runtimes and local embedding/transcription solutions.
 
 -   Python 3.9+
 -   API Keys:
