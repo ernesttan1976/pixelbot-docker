@@ -219,7 +219,7 @@ video_audio_chunks_view.add_computed_column(
         audio=video_audio_chunks_view.audio,
         model=config.WHISPER_MODEL_ID,
     ),
-    if_exists="replace", # 'replace' ensures updates if the function or model changes
+    if_exists="ignore", # Use ignore to prevent re-computation on every restart
 )
 print("Video audio transcriptions column added/updated.")
 
@@ -303,7 +303,7 @@ audio_chunks_view.add_computed_column(
         audio=audio_chunks_view.audio,
         model=config.WHISPER_MODEL_ID,
     ),
-    if_exists="replace",
+    if_exists="ignore",
 )
 print("Direct audio transcriptions column added/updated.")
 
@@ -484,8 +484,10 @@ image_gen_tasks.add_computed_column(
     generated_image=openai.image_generations(
         prompt=image_gen_tasks.prompt,
         model=config.DALLE_MODEL_ID,
-        size="1024x1024",
-        # Add other DALL-E parameters like quality, style if desired
+        model_kwargs={
+            "size": "1024x1024",
+            # Add other DALL-E parameters like quality, style if desired
+        }
     ),
     if_exists="ignore",
 )
@@ -535,16 +537,17 @@ tool_agent = pxt.create_table(
 tool_agent.add_computed_column(
     initial_response=messages(
         model=config.CLAUDE_MODEL_ID,
-        system=tool_agent.initial_system_prompt,
         messages=[{"role": "user", "content": tool_agent.prompt}],
+        max_tokens=tool_agent.max_tokens,
         tools=tools, # Pass the registered tools
         tool_choice=tools.choice(required=True), # Force the LLM to choose a tool
-        # Pass LLM parameters from the input row
-        max_tokens=tool_agent.max_tokens,
-        stop_sequences=tool_agent.stop_sequences,
-        temperature=tool_agent.temperature,
-        top_k=tool_agent.top_k,
-        top_p=tool_agent.top_p,
+        model_kwargs={
+            "system": tool_agent.initial_system_prompt,
+            "stop_sequences": tool_agent.stop_sequences,
+            "temperature": tool_agent.temperature,
+            "top_k": tool_agent.top_k,
+            "top_p": tool_agent.top_p,
+        }
     ),
     if_exists="replace", # Replace if the function definition changes
 )
@@ -552,7 +555,7 @@ tool_agent.add_computed_column(
 # Step 2: Tool Execution
 # Calls the tool selected by the LLM in the previous step using `invoke_tools`.
 tool_agent.add_computed_column(
-    tool_output=invoke_tools(tools, tool_agent.initial_response), if_exists="replace"
+    tool_output=invoke_tools(tools, tool_agent.initial_response), if_exists="ignore"
 )
 
 # Step 3: Context Retrieval (Parallel Execution)
@@ -561,11 +564,11 @@ tool_agent.add_computed_column(
 
 tool_agent.add_computed_column(
     doc_context=search_documents(tool_agent.prompt, tool_agent.user_id),
-    if_exists="replace",
+    if_exists="ignore",
 )
 
 tool_agent.add_computed_column(
-    image_context=search_images(tool_agent.prompt, tool_agent.user_id), if_exists="replace"
+    image_context=search_images(tool_agent.prompt, tool_agent.user_id), if_exists="ignore"
 )
 
 # Add Video Frame Search Context
@@ -598,7 +601,7 @@ tool_agent.add_computed_column(
         tool_agent.memory_context,
         tool_agent.chat_memory_context,
     ),
-    if_exists="replace",
+    if_exists="ignore",
 )
 
 # Step 6: Assemble Final LLM Messages
@@ -610,7 +613,7 @@ tool_agent.add_computed_column(
         image_context=tool_agent.image_context,
         video_frame_context=tool_agent.video_frame_context,
     ),
-    if_exists="replace",
+    if_exists="ignore",
 )
 
 # Step 7: Final LLM Reasoning (Answer Generation)
@@ -618,22 +621,24 @@ tool_agent.add_computed_column(
 tool_agent.add_computed_column(
     final_response=messages(
         model=config.CLAUDE_MODEL_ID,
-        system=tool_agent.final_system_prompt,
         messages=tool_agent.final_prompt_messages, # Use the assembled message list
         max_tokens=tool_agent.max_tokens,
-        stop_sequences=tool_agent.stop_sequences,
-        temperature=tool_agent.temperature,
-        top_k=tool_agent.top_k,
-        top_p=tool_agent.top_p,
+        model_kwargs={
+            "system": tool_agent.final_system_prompt,
+            "stop_sequences": tool_agent.stop_sequences,
+            "temperature": tool_agent.temperature,
+            "top_k": tool_agent.top_k,
+            "top_p": tool_agent.top_p,
+        }
     ),
-    if_exists="replace",
+    if_exists="ignore",
 )
 
 # Step 8: Extract Final Answer Text
 # Simple transformation using Pixeltable expressions.
 tool_agent.add_computed_column(
     answer=tool_agent.final_response.content[0].text,
-    if_exists="replace",
+    if_exists="ignore",
 )
 
 # Step 9: Prepare Prompt for Follow-up LLM
@@ -642,7 +647,7 @@ tool_agent.add_computed_column(
     follow_up_input_message=functions.assemble_follow_up_prompt(
         original_prompt=tool_agent.prompt, answer_text=tool_agent.answer
     ),
-    if_exists="replace",
+    if_exists="ignore",
 )
 
 # Step 10: Generate Follow-up Suggestions (Mistral)
@@ -656,15 +661,17 @@ tool_agent.add_computed_column(
                 "content": tool_agent.follow_up_input_message,
             }
         ],
-        max_tokens=150,
-        temperature=0.6,
+        model_kwargs={
+            "max_tokens": 150,
+            "temperature": 0.6,
+        }
     ),
-    if_exists="replace",
+    if_exists="ignore",
 )
 
 # Step 11: Extract Follow-up Text
 # Simple transformation using Pixeltable expressions.
 tool_agent.add_computed_column(
     follow_up_text=tool_agent.follow_up_raw_response.choices[0].message.content,
-    if_exists="replace",
+    if_exists="ignore",
 )
