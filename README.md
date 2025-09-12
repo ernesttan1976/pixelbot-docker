@@ -1,4 +1,4 @@
-# Pixelbot: Your AI Assistant for Everything
+# Pixelbot: A Reference Implementation
 
 <div align="center">
 <img src="static/image/overview.gif" alt="Pixelbot Demo" width="600"/>
