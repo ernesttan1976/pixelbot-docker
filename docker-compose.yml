@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  pixelbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pixelbot
+    ports:
+      - "5001:5001"
+    env_file:
+      - .env
+    volumes:
+      # Mount data directory for uploaded files
+      - ./data:/app/data
+      # Mount logs directory
+      - ./logs:/app/logs
+      # Mount pixeltable database directory (if using local storage)
+      - pixelbot_data:/app/.pixeltable
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  pixelbot_data:
+    driver: local

@@ -18,13 +18,7 @@ from pixeltable.functions import openai
 # Mistral removed - using OpenAI instead
 
 # - Data transformation tools
-from pixeltable.iterators import (
-    DocumentSplitter,
-    FrameIterator,
-    AudioSplitter,
-    StringSplitter,
-)
-from pixeltable.functions import string as pxt_str
+from pixeltable.functions import document, video, audio, string as pxt_str
 
 # Custom function imports (UDFs)
 import functions
@@ -53,15 +47,17 @@ print("Created/Loaded 'agents.collection' table")
 # Create a view to chunk documents using a Pixeltable Iterator.
 # Views transform data on-demand without duplicating storage.
 # Iterators like DocumentSplitter handle the generation of new rows (chunks).
+# Using "page" separator instead of "paragraph" to support PDF documents.
+# PDFs don't support paragraph splitting, but page splitting works for all document types.
 chunks = pxt.create_view(
     "agents.chunks",
     documents,
-    iterator=DocumentSplitter.create(
+    iterator=document.document_splitter(
         document=documents.document,
-        separators="paragraph",
+        separators="page",
         metadata="title, heading, page" # Include metadata from the document
     ),
-    if_exists="ignore",
+    if_exists="replace",  # Use "replace" to update the view with the new separator setting
 )
 
 # Add an embedding index to the 'text' column of the chunks view.
@@ -80,7 +76,7 @@ chunks.add_embedding_index(
 @pxt.query
 def search_documents(query_text: str, user_id: str):
     # Calculate semantic similarity between the query and indexed text chunks.
-    sim = chunks.text.similarity(query_text)
+    sim = chunks.text.similarity(string=query_text)
     # Use Pixeltable's fluent API (similar to SQL) to filter, order, and select results.
     return (
         chunks.where(
@@ -141,7 +137,7 @@ def search_images(query_text: str, user_id: str):
     while still allowing relevant results.
     """
     # Calculate similarity between the query text embedding and image embeddings.
-    sim = images.image.similarity(query_text)  # Cross-modal similarity search
+    sim = images.image.similarity(string=query_text)  # Cross-modal similarity search
     print(f"Image search query: '{query_text}' for user: {user_id}")
     
     # Use a configurable similarity threshold to ensure relevance
@@ -197,7 +193,7 @@ print("Creating video frames view...")
 video_frames_view = pxt.create_view(
     "agents.video_frames",
     videos,
-    iterator=FrameIterator.create(video=videos.video, fps=1), # Extract 1 frame per second
+    iterator=video.frame_iterator(video=videos.video, fps=1), # Extract 1 frame per second
     if_exists="ignore",
 )
 print("Created/Loaded 'agents.video_frames' view")
@@ -215,7 +211,7 @@ print("Video frame embedding index created/verified.")
 # Define a video frame search query.
 @pxt.query
 def search_video_frames(query_text: str, user_id: str):
-    sim = video_frames_view.frame.similarity(query_text)
+    sim = video_frames_view.frame.similarity(string=query_text)
     print(f"Video Frame search query: {query_text} for user: {user_id}")
     return (
         video_frames_view.where((video_frames_view.user_id == user_id) & (sim > 0.25))
@@ -239,7 +235,7 @@ videos.add_computed_column(
 video_audio_chunks_view = pxt.create_view(
     "agents.video_audio_chunks",
     videos,
-    iterator=AudioSplitter.create(
+    iterator=audio.audio_splitter(
         audio=videos.audio,          # Input column with extracted audio
         chunk_duration_sec=30.0
     ),
@@ -263,7 +259,7 @@ video_transcript_sentences_view = pxt.create_view(
     video_audio_chunks_view.where(
         video_audio_chunks_view.transcription != None # Process only chunks with transcriptions
     ),
-    iterator=StringSplitter.create(
+    iterator=pxt_str.string_splitter(
         text=video_audio_chunks_view.transcription.text, # Access the 'text' field from the JSON result
         separators="sentence",
     ),
@@ -294,7 +290,7 @@ def search_video_transcripts(query_text: str):
     Returns:
         A list of video transcript sentences and their source video files.
     """
-    sim = video_transcript_sentences_view.text.similarity(query_text)
+    sim = video_transcript_sentences_view.text.similarity(string=query_text)
     return (
         video_transcript_sentences_view.where((video_transcript_sentences_view.user_id == 'local_user') & (sim > 0.7))
         .order_by(sim, asc=False)
@@ -323,7 +319,7 @@ print("Sample audio insertion is disabled.")
 audio_chunks_view = pxt.create_view(
     "agents.audio_chunks",
     audios,
-    iterator=AudioSplitter.create(
+    iterator=audio.audio_splitter(
         audio=audios.audio,
         chunk_duration_sec=60.0
     ),
@@ -345,7 +341,7 @@ print("Direct audio transcriptions column added/updated.")
 audio_transcript_sentences_view = pxt.create_view(
     "agents.audio_transcript_sentences",
     audio_chunks_view.where(audio_chunks_view.transcription != None),
-    iterator=StringSplitter.create(
+    iterator=pxt_str.string_splitter(
         text=audio_chunks_view.transcription.text, separators="sentence"
     ),
     if_exists="ignore",
@@ -370,7 +366,7 @@ def search_audio_transcripts(query_text: str):
     Returns:
         A list of audio transcript sentences and their source audio files.
     """
-    sim = audio_transcript_sentences_view.text.similarity(query_text)
+    sim = audio_transcript_sentences_view.text.similarity(string=query_text)
     print(f"Direct Audio Transcript search query: {query_text}")
     return (
         audio_transcript_sentences_view.where((audio_transcript_sentences_view.user_id == 'local_user') & (sim > 0.6))
@@ -424,7 +420,7 @@ def get_all_memory(user_id: str):
 # Query for semantic search on memory bank content.
 @pxt.query
 def search_memory(query_text: str, user_id: str):
-    sim = memory_bank.content.similarity(query_text)
+    sim = memory_bank.content.similarity(string=query_text)
     print(f"Memory Bank search query: {query_text} for user: {user_id}")
     return (
         memory_bank.where((memory_bank.user_id == user_id) & (sim > 0.8))
@@ -477,7 +473,7 @@ def get_recent_chat_history(user_id: str, limit: int = 4): # Default to last 4 m
 # Query for semantic search across the entire chat history.
 @pxt.query
 def search_chat_history(query_text: str, user_id: str):
-    sim = chat_history.content.similarity(query_text)
+    sim = chat_history.content.similarity(string=query_text)
     print(f"Chat History search query: {query_text} for user: {user_id}")
     return (
         chat_history.where((chat_history.user_id == user_id) & (sim > 0.8))
