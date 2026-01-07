@@ -13,10 +13,9 @@ from pixeltable.functions import image as pxt_image
 from pixeltable.functions.video import extract_audio
 
 # - LLM and AI model integrations
-from pixeltable.functions.anthropic import invoke_tools, messages
 from pixeltable.functions.huggingface import sentence_transformer, clip
 from pixeltable.functions import openai
-from pixeltable.functions.mistralai import chat_completions as mistral
+# Mistral removed - using OpenAI instead
 
 # - Data transformation tools
 from pixeltable.iterators import (
@@ -29,6 +28,7 @@ from pixeltable.functions import string as pxt_str
 
 # Custom function imports (UDFs)
 import functions
+from functions import invoke_openai_tools
 
 # Load environment variables
 load_dotenv()
@@ -132,11 +132,25 @@ images.add_embedding_index(
 # Define an image search query.
 @pxt.query
 def search_images(query_text: str, user_id: str):
+    """
+    Search for images using CLIP cross-modal similarity.
+    Uses a similarity threshold of 0.35 to ensure relevance.
+    
+    CLIP similarity scores typically range from -1 to 1, with higher scores 
+    indicating better matches. A threshold of 0.35 filters out weak matches 
+    while still allowing relevant results.
+    """
     # Calculate similarity between the query text embedding and image embeddings.
     sim = images.image.similarity(query_text)  # Cross-modal similarity search
-    print(f"Image search query: {query_text} for user: {user_id}")
+    print(f"Image search query: '{query_text}' for user: {user_id}")
+    
+    # Use a configurable similarity threshold to ensure relevance
+    # This is higher than the previous 0.25 threshold to reduce false positives
+    # You can adjust IMAGE_SEARCH_SIMILARITY_THRESHOLD in config.py
+    similarity_threshold = config.IMAGE_SEARCH_SIMILARITY_THRESHOLD
+    
     return (
-        images.where((images.user_id == user_id) & (sim > 0.25))
+        images.where((images.user_id == user_id) & (sim > similarity_threshold))
         .order_by(sim, asc=False)
         .select(
             # Return Base64 encoded, resized images for direct display in the UI.
@@ -146,6 +160,26 @@ def search_images(query_text: str, user_id: str):
             sim=sim,
         )
         .limit(5)
+    )
+
+
+# Define a query to get the most recently uploaded images for a user.
+# This is useful when users ask to describe "this photo" or "this image" 
+# without a specific semantic match.
+@pxt.query
+def get_recent_images(user_id: str, limit: int = 3):
+    """Get the most recently uploaded images for a user."""
+    print(f"Getting recent images for user: {user_id}")
+    return (
+        images.where(images.user_id == user_id)
+        .order_by(images.timestamp, asc=False)
+        .select(
+            encoded_image=pxt_image.b64_encode(
+                pxt_image.resize(images.image, size=(224, 224)), "png"
+            ),
+            sim=1.0,  # Set similarity to 1.0 for recent images (fixed value)
+        )
+        .limit(limit)
     )
 
 
@@ -533,29 +567,30 @@ tool_agent = pxt.create_table(
 # Pixeltable automatically executes these steps based on data dependencies.
 
 # Step 1: Initial LLM Reasoning (Tool Selection)
-# Calls Claude via the Pixeltable `messages` function, providing available tools.
+# Calls OpenAI via the Pixeltable `chat_completions` function, providing available tools.
 tool_agent.add_computed_column(
-    initial_response=messages(
-        model=config.CLAUDE_MODEL_ID,
-        messages=[{"role": "user", "content": tool_agent.prompt}],
-        max_tokens=tool_agent.max_tokens,
+    initial_response=openai.chat_completions(
+        messages=functions.sanitize_messages([
+            {"role": "system", "content": tool_agent.initial_system_prompt},
+            {"role": "user", "content": tool_agent.prompt}
+        ]),
+        model=config.OPENAI_MODEL_ID,
         tools=tools, # Pass the registered tools
         tool_choice=tools.choice(required=True), # Force the LLM to choose a tool
-        model_kwargs={
-            "system": tool_agent.initial_system_prompt,
-            "stop_sequences": tool_agent.stop_sequences,
-            "temperature": tool_agent.temperature,
-            "top_k": tool_agent.top_k,
-            "top_p": tool_agent.top_p,
-        }
+        model_kwargs=functions.sanitize_model_kwargs(
+            tool_agent.max_tokens,
+            tool_agent.stop_sequences,
+            tool_agent.temperature,
+            tool_agent.top_p,
+        )
     ),
     if_exists="replace", # Replace if the function definition changes
 )
 
 # Step 2: Tool Execution
-# Calls the tool selected by the LLM in the previous step using `invoke_tools`.
+# Calls the tool selected by the LLM in the previous step using `invoke_openai_tools`.
 tool_agent.add_computed_column(
-    tool_output=invoke_tools(tools, tool_agent.initial_response), if_exists="ignore"
+    tool_output=invoke_openai_tools(tools, tool_agent.initial_response), if_exists="ignore"
 )
 
 # Step 3: Context Retrieval (Parallel Execution)
@@ -567,8 +602,23 @@ tool_agent.add_computed_column(
     if_exists="ignore",
 )
 
+# Get semantic search results
 tool_agent.add_computed_column(
-    image_context=search_images(tool_agent.prompt, tool_agent.user_id), if_exists="ignore"
+    image_context_semantic=search_images(tool_agent.prompt, tool_agent.user_id), if_exists="ignore"
+)
+
+# Get recent images as fallback
+tool_agent.add_computed_column(
+    image_context_recent=get_recent_images(tool_agent.user_id, limit=3), if_exists="ignore"
+)
+
+# Combine both semantic and recent images
+tool_agent.add_computed_column(
+    image_context=functions.combine_image_context(
+        tool_agent.image_context_semantic,
+        tool_agent.image_context_recent
+    ),
+    if_exists="ignore"
 )
 
 # Add Video Frame Search Context
@@ -617,32 +667,39 @@ tool_agent.add_computed_column(
 )
 
 # Step 7: Final LLM Reasoning (Answer Generation)
-# Calls Claude again with the fully assembled context and history.
+# Calls OpenAI again with the fully assembled context and history.
+# Note: No tools are passed here - the model should analyze images directly.
+# We explicitly disable tools by setting tool_choice='none' in model_kwargs.
 tool_agent.add_computed_column(
-    final_response=messages(
-        model=config.CLAUDE_MODEL_ID,
-        messages=tool_agent.final_prompt_messages, # Use the assembled message list
-        max_tokens=tool_agent.max_tokens,
-        model_kwargs={
-            "system": tool_agent.final_system_prompt,
-            "stop_sequences": tool_agent.stop_sequences,
-            "temperature": tool_agent.temperature,
-            "top_k": tool_agent.top_k,
-            "top_p": tool_agent.top_p,
-        }
+    final_response=openai.chat_completions(
+        messages=functions.sanitize_messages(
+            functions.combine_messages_with_system(
+                tool_agent.final_system_prompt,
+                tool_agent.final_prompt_messages
+            )
+        ),
+        model=config.OPENAI_MODEL_ID,
+        tools=None,  # Explicitly set to None
+        tool_choice=None,  # Explicitly set to None
+        model_kwargs=functions.sanitize_model_kwargs_final_response(
+            tool_agent.max_tokens,
+            tool_agent.stop_sequences,
+            tool_agent.temperature,
+            tool_agent.top_p,
+        )
     ),
     if_exists="ignore",
 )
 
 # Step 8: Extract Final Answer Text
-# Simple transformation using Pixeltable expressions.
+# Use helper function to safely extract answer, handling None values.
 tool_agent.add_computed_column(
-    answer=tool_agent.final_response.content[0].text,
+    answer=functions.extract_openai_answer(tool_agent.final_response),
     if_exists="ignore",
 )
 
 # Step 9: Prepare Prompt for Follow-up LLM
-# Calls a UDF to format the input for Mistral.
+# Calls a UDF to format the input for OpenAI (replacing Mistral).
 tool_agent.add_computed_column(
     follow_up_input_message=functions.assemble_follow_up_prompt(
         original_prompt=tool_agent.prompt, answer_text=tool_agent.answer
@@ -650,17 +707,17 @@ tool_agent.add_computed_column(
     if_exists="ignore",
 )
 
-# Step 10: Generate Follow-up Suggestions (Mistral)
-# Calls Mistral via the Pixeltable integration.
+# Step 10: Generate Follow-up Suggestions (OpenAI - replacing Mistral)
+# Calls OpenAI via the Pixeltable integration.
 tool_agent.add_computed_column(
-    follow_up_raw_response=mistral(
-        model=config.MISTRAL_MODEL_ID,
-        messages=[
+    follow_up_raw_response=openai.chat_completions(
+        messages=functions.sanitize_messages([
             {
                 "role": "user",
                 "content": tool_agent.follow_up_input_message,
             }
-        ],
+        ]),
+        model=config.OPENAI_MODEL_ID,
         model_kwargs={
             "max_tokens": 150,
             "temperature": 0.6,
@@ -670,8 +727,8 @@ tool_agent.add_computed_column(
 )
 
 # Step 11: Extract Follow-up Text
-# Simple transformation using Pixeltable expressions.
+# Use helper function to safely extract follow-up text, handling None values.
 tool_agent.add_computed_column(
-    follow_up_text=tool_agent.follow_up_raw_response.choices[0].message.content,
+    follow_up_text=functions.extract_openai_answer(tool_agent.follow_up_raw_response),
     if_exists="ignore",
 )

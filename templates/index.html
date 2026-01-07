@@ -797,10 +797,10 @@ tools = pxt.tools(
     functions.search_news
 )
 
-# Pass tools to the LLM (Claude) via a computed column
+# Pass tools to the LLM (OpenAI) via a computed column
 tool_agent.add_computed_column(
-    initial_response=messages(
-        model=config.CLAUDE_MODEL_ID,
+    initial_response=openai.chat_completions(
+        model=config.OPENAI_MODEL_ID,
         system=tool_agent.initial_system_prompt,
         messages=[{"role": "user", "content": tool_agent.prompt}],
         tools=tools, # Make tools available
@@ -817,7 +817,7 @@ tool_agent.add_computed_column(
 )
 </code></pre>
                                                 </li>
-                                                <li>Calling LLMs (like Claude or Mistral) to reason, generate text, or choose tools.</li>
+                                                <li>Calling LLMs (like OpenAI GPT) to reason, generate text, or choose tools.</li>
                                             </ul>
                                             Pixeltable manages the execution order and caching automatically based on these declarative steps.
                                         </li>

@@ -20,6 +20,8 @@ from duckduckgo_search import DDGS
 
 # Pixeltable library
 import pixeltable as pxt
+from pixeltable.func import Tools
+from pixeltable import exprs
 
 # Pixeltable UDFs (User-Defined Functions) extend the platform's capabilities.
 # They allow you to wrap *any* Python code and use it within Pixeltable's
@@ -313,9 +315,12 @@ Content: {content[:150]}{"..." if len(content) > 150 else ""}"""
     tool_outputs_str = str(tool_outputs) if tool_outputs else "N/A"
 
     # Construct the final summary text block
+    # Ensure question is never None
+    question_str = str(question) if question is not None else ""
+    
     text_content = f"""
 ORIGINAL QUESTION:
-{question}
+{question_str}
 
 AVAILABLE CONTEXT:
 
@@ -369,72 +374,153 @@ def assemble_final_messages(
     messages = []
 
     # 1. Add recent chat history (if any) in chronological order
+    # If images are present, we'll add history after checking for images
+    has_images = image_context and len([item for item in image_context if isinstance(item, dict) and item.get("encoded_image")]) > 0
+    
     if history_context:
         for item in reversed(history_context):
             role = item.get("role")
             content = item.get("content")
-            if role and content:
+            # Filter out None values and ensure content is not None
+            if role and content is not None:
+                # If images are present, filter out tool-related messages to prevent tool usage
+                if has_images:
+                    # Skip messages that contain tool calls or tool-related content
+                    content_str = str(content) if not isinstance(content, list) else str(content)
+                    if "tool_calls" in content_str.lower() or "function_call" in content_str.lower():
+                        continue  # Skip tool-related messages when analyzing images
+                
+                # If content is a list, filter out None values
+                if isinstance(content, list):
+                    content = [c for c in content if c is not None]
+                    if not content:  # Skip if all content was None
+                        continue
                 messages.append({"role": role, "content": content})
 
     # 2. Prepare the content block for the final user message
     final_user_content = []
 
     # 2a. Add image blocks (if any)
+    image_count = 0
     if image_context:
         for item in image_context:
             # Safely extract base64 encoded image data
             if isinstance(item, dict) and "encoded_image" in item:
                 image_data = item["encoded_image"]
+                # Skip if None
+                if image_data is None:
+                    continue
                 # Ensure it's a string
                 if isinstance(image_data, bytes):
                     image_data = image_data.decode("utf-8")
                 elif not isinstance(image_data, str):
                     continue  # Skip invalid data
+                
+                # Skip if empty string
+                if not image_data:
+                    continue
 
-                # Append in the format required by the LLM API
+                # Append in OpenAI's format for images
+                # OpenAI expects data URIs directly
+                if not image_data.startswith("data:"):
+                    image_data = f"data:image/png;base64,{image_data}"
                 final_user_content.append(
                     {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",  # Assuming PNG, adjust if needed
-                            "data": image_data,
-                        },
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_data
+                        }
                     }
                 )
+                image_count += 1
+    
+    # Log image count for debugging
+    if image_count > 0:
+        print(f"Added {image_count} image(s) to final user message")
+    else:
+        print("Warning: No images were added to final user message despite image_context being provided")
 
     # 2b. Add video frame blocks (if any) - NOTE: Currently illustrative, LLM support varies
     if video_frame_context:
         for item in video_frame_context:
             # Safely extract base64 encoded video frame data
-            if isinstance(item, dict) and "encoded_video_frame" in item:
-                video_frame_data = item["encoded_video_frame"]
+            if isinstance(item, dict) and "encoded_frame" in item:
+                video_frame_data = item["encoded_frame"]
+                # Skip if None
+                if video_frame_data is None:
+                    continue
                 if isinstance(video_frame_data, bytes):
                     video_frame_data = video_frame_data.decode("utf-8")
                 elif not isinstance(video_frame_data, str):
                     continue  # Skip invalid data
+                
+                # Skip if empty string
+                if not video_frame_data:
+                    continue
 
-                # Append in the format required by the LLM API (adjust if API differs)
+                # Append in OpenAI's format for video frames (treated as images)
+                if not video_frame_data.startswith("data:"):
+                    video_frame_data = f"data:image/png;base64,{video_frame_data}"
                 final_user_content.append(
                     {
-                        "type": "video_frame",  # Hypothetical type, check LLM docs
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",  # Frames are usually images
-                            "data": video_frame_data,
-                        },
+                        "type": "image_url",
+                        "image_url": {
+                            "url": video_frame_data
+                        }
                     }
                 )
 
-    # 2c. Add the main text context block
+    # 2c. Add the main text context block (ensure it's never None)
+    # If images are present, prioritize image analysis and completely remove tool-related context
+    if image_count > 0:
+        # When images are present, create a focused prompt that emphasizes image analysis
+        # Extract just the question from the context, removing all tool-related content
+        question_str = ""
+        if multimodal_context_text:
+            context_str = str(multimodal_context_text)
+            # Extract question if present
+            if "ORIGINAL QUESTION:" in context_str:
+                parts = context_str.split("ORIGINAL QUESTION:")
+                if len(parts) > 1:
+                    question_str = parts[1].split("\n")[0].strip()
+            else:
+                # Try to extract a simple question from the context
+                lines = context_str.split("\n")
+                for line in lines:
+                    if line.strip() and not line.strip().startswith("[") and "tool" not in line.lower():
+                        question_str = line.strip()[:200]  # Limit length
+                        break
+        
+        if not question_str:
+            question_str = "Please analyze the image(s) provided."
+        
+        # Create a completely clean, image-focused prompt with NO tool references
+        text_content = f"""You are analyzing {image_count} image(s) provided above.
+
+USER REQUEST: {question_str}
+
+YOUR TASK:
+Analyze the image(s) using your vision capabilities and describe what you see in detail.
+
+IMPORTANT RULES:
+- You MUST analyze the image(s) directly - they are provided above
+- You MUST respond with text only - describe what you see
+- You MUST NOT use any tools, functions, or external APIs
+- You MUST NOT attempt function calls
+- Simply look at the image(s) and describe them"""
+    else:
+        # No images, use the full context as before
+        text_content = str(multimodal_context_text) if multimodal_context_text is not None else ""
+    
     final_user_content.append(
         {
             "type": "text",
-            "text": multimodal_context_text,  # Use the pre-formatted summary
+            "text": text_content,
         }
     )
 
     # 3. Append the complete user message (potentially multimodal)
+    # Always add the message, even if only text (ensures we have at least one content item)
     messages.append({"role": "user", "content": final_user_content})
 
     return messages
@@ -487,3 +573,358 @@ What specific LLMs and ML models does Pixeltable integrate with?
     return follow_up_system_prompt_template.format(
         original_prompt=original_prompt, answer_text=answer_text
     )
+
+
+# Helper function to recursively sanitize nested structures (removes None values)
+def _recursive_sanitize(obj: Any) -> Any:
+    """Recursively removes None values from nested dictionaries and lists.
+    Preserves empty strings and empty lists/dicts as they are valid values."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        sanitized = {}
+        for key, value in obj.items():
+            sanitized_value = _recursive_sanitize(value)
+            if sanitized_value is not None:
+                sanitized[key] = sanitized_value
+        # Return empty dict if all values were None (but this shouldn't happen in practice)
+        return sanitized
+    elif isinstance(obj, list):
+        sanitized = []
+        for item in obj:
+            sanitized_item = _recursive_sanitize(item)
+            if sanitized_item is not None:
+                sanitized.append(sanitized_item)
+        return sanitized
+    else:
+        # For primitive types (str, int, float, bool), return as-is
+        return obj
+
+
+# Helper function to sanitize messages for OpenAI (removes None values)
+@pxt.udf
+def sanitize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Sanitizes messages by removing None values to prevent token counting errors."""
+    sanitized = []
+    for msg in messages:
+        if msg is None:
+            continue
+        # Recursively sanitize the message to remove all None values
+        sanitized_msg = _recursive_sanitize(msg)
+        if sanitized_msg is None:
+            continue
+        # Ensure it's a dict and has required fields
+        if not isinstance(sanitized_msg, dict):
+            continue
+        # Ensure role and content exist
+        if "role" not in sanitized_msg:
+            continue
+        # If content is missing or None after sanitization, set to empty string
+        if "content" not in sanitized_msg or sanitized_msg["content"] is None:
+            sanitized_msg["content"] = ""
+        # If content is a list and empty after sanitization, set to empty string
+        elif isinstance(sanitized_msg["content"], list) and len(sanitized_msg["content"]) == 0:
+            sanitized_msg["content"] = ""
+        sanitized.append(sanitized_msg)
+    return sanitized if sanitized else [{"role": "user", "content": ""}]  # Return at least one message
+
+
+# Helper function to sanitize model_kwargs for OpenAI (removes None values)
+@pxt.udf
+def sanitize_model_kwargs(
+    max_tokens: Optional[int],
+    stop_sequences: Optional[pxt.Json],  # Use Json type for flexibility
+    temperature: Optional[float],
+    top_p: Optional[float],
+) -> pxt.Json:
+    """Sanitizes model kwargs by removing None values and ensuring proper types."""
+    kwargs = {}
+    
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    
+    # OpenAI accepts stop as a string or list of strings, but not None
+    if stop_sequences is not None:
+        # Ensure it's a list of strings
+        if isinstance(stop_sequences, str):
+            kwargs["stop"] = stop_sequences
+        elif isinstance(stop_sequences, list):
+            # Filter out None values and ensure all are strings
+            stop_list = [str(s) for s in stop_sequences if s is not None]
+            if stop_list:
+                kwargs["stop"] = stop_list if len(stop_list) > 1 else stop_list[0]
+    
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    
+    if top_p is not None:
+        kwargs["top_p"] = top_p
+    
+    return kwargs
+
+
+# Helper function to sanitize model_kwargs for final response
+# Note: We do NOT set tool_choice here because OpenAI API doesn't allow tool_choice
+# when tools=None. Simply omitting tools and tool_choice is sufficient to disable tools.
+@pxt.udf
+def sanitize_model_kwargs_final_response(
+    max_tokens: Optional[int],
+    stop_sequences: Optional[pxt.Json],
+    temperature: Optional[float],
+    top_p: Optional[float],
+) -> pxt.Json:
+    """Sanitizes model kwargs for final response. Tools are disabled by not passing them."""
+    kwargs = {}
+    
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    
+    if stop_sequences is not None:
+        if isinstance(stop_sequences, str):
+            kwargs["stop"] = stop_sequences
+        elif isinstance(stop_sequences, list):
+            stop_list = [str(s) for s in stop_sequences if s is not None]
+            if stop_list:
+                kwargs["stop"] = stop_list if len(stop_list) > 1 else stop_list[0]
+    
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    
+    if top_p is not None:
+        kwargs["top_p"] = top_p
+    
+    # Do NOT set tool_choice - OpenAI API doesn't allow it when tools=None
+    # Simply omitting tools and tool_choice is sufficient to disable tools
+    
+    return kwargs
+
+
+# Helper function to sanitize model_kwargs with explicit tool_choice
+@pxt.udf
+def sanitize_model_kwargs_with_tool_choice(
+    max_tokens: Optional[int],
+    stop_sequences: Optional[pxt.Json],
+    temperature: Optional[float],
+    top_p: Optional[float],
+    tool_choice: Optional[str] = None,
+) -> pxt.Json:
+    """Sanitizes model kwargs and optionally sets tool_choice to explicitly disable tools."""
+    kwargs = {}
+    
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    
+    # OpenAI accepts stop as a string or list of strings, but not None
+    if stop_sequences is not None:
+        # Ensure it's a list of strings
+        if isinstance(stop_sequences, str):
+            kwargs["stop"] = stop_sequences
+        elif isinstance(stop_sequences, list):
+            # Filter out None values and ensure all are strings
+            stop_list = [str(s) for s in stop_sequences if s is not None]
+            if stop_list:
+                kwargs["stop"] = stop_list if len(stop_list) > 1 else stop_list[0]
+    
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    
+    if top_p is not None:
+        kwargs["top_p"] = top_p
+    
+    # Explicitly set tool_choice if provided (e.g., 'none' to disable tools)
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
+    
+    return kwargs
+
+
+# Helper function to combine system message with other messages for OpenAI
+@pxt.udf
+def combine_messages_with_system(system_prompt: str, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Combines a system prompt with a list of messages for OpenAI chat completions."""
+    # Filter out None values and ensure system prompt is not None
+    if system_prompt is None:
+        system_prompt = ""
+    
+    result = [{"role": "system", "content": system_prompt}]
+    if messages:
+        # Filter out any None messages and ensure content is not None
+        filtered_messages = []
+        for msg in messages:
+            if msg is None:
+                continue
+            role = msg.get("role")
+            content = msg.get("content")
+            if role and content is not None:
+                # If content is a list, filter out None values
+                if isinstance(content, list):
+                    content = [c for c in content if c is not None]
+                    if not content:  # Skip if all content was None
+                        continue
+                filtered_messages.append({"role": role, "content": content})
+        result.extend(filtered_messages)
+    
+    # Ensure we always have at least one user message
+    # If no messages were added, add a minimal user message to prevent API errors
+    if len(result) == 1:  # Only system message
+        print("Warning: No user messages found after filtering. Adding minimal user message.")
+        result.append({"role": "user", "content": "Please provide a response."})
+    
+    return result
+
+
+# OpenAI Tool Invocation Helper
+# Converts OpenAI's response format to Pixeltable's tool invocation format
+@pxt.udf
+def _openai_response_to_pxt_tool_calls(response: dict) -> dict | None:
+    """Converts an OpenAI response dict to Pixeltable tool invocation format."""
+    if not response or 'choices' not in response or len(response['choices']) == 0:
+        return None
+    
+    message = response['choices'][0].get('message', {})
+    tool_calls = message.get('tool_calls', [])
+    
+    if len(tool_calls) == 0:
+        return None
+    
+    pxt_tool_calls: dict[str, list[dict[str, Any]]] = {}
+    for tool_call in tool_calls:
+        function_info = tool_call.get('function', {})
+        tool_name = function_info.get('name')
+        if not tool_name:
+            continue
+        
+        if tool_name not in pxt_tool_calls:
+            pxt_tool_calls[tool_name] = []
+        
+        # Parse the arguments JSON string
+        args_str = function_info.get('arguments', '{}')
+        try:
+            import json
+            args = json.loads(args_str) if isinstance(args_str, str) else args_str
+        except (json.JSONDecodeError, TypeError):
+            args = {}
+        
+        pxt_tool_calls[tool_name].append({'args': args})
+    
+    return pxt_tool_calls if pxt_tool_calls else None
+
+
+def invoke_openai_tools(tools: Tools, response: exprs.Expr) -> exprs.InlineDict:
+    """Converts an OpenAI response dict to Pixeltable tool invocation format and calls `tools._invoke()`."""
+    return tools._invoke(_openai_response_to_pxt_tool_calls(response))
+
+
+# Helper function to combine semantic search results with recent images
+@pxt.udf
+def combine_image_context(
+    semantic_results: Optional[List[Dict[str, Any]]],
+    recent_images: Optional[List[Dict[str, Any]]],
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Combines semantic search results with recent images.
+    Prioritizes semantic matches but includes recent images if semantic results are empty.
+    """
+    combined = []
+    
+    # Add semantic search results first (they have higher priority)
+    if semantic_results:
+        for item in semantic_results:
+            if isinstance(item, dict) and item.get("encoded_image"):
+                combined.append(item)
+    
+    # If we have semantic results, we might still want to include recent images
+    # But let's only add recent images if we have fewer than 3 semantic results
+    if recent_images and len(combined) < 3:
+        # Track which images we've already added (by checking if encoded_image matches)
+        added_images = {item.get("encoded_image") for item in combined if item.get("encoded_image")}
+        
+        for item in recent_images:
+            if isinstance(item, dict) and item.get("encoded_image"):
+                # Only add if not already in combined results
+                if item.get("encoded_image") not in added_images:
+                    combined.append(item)
+                    added_images.add(item.get("encoded_image"))
+                    if len(combined) >= 5:  # Limit total to 5 images
+                        break
+    
+    # If no semantic results, use recent images
+    if not combined and recent_images:
+        for item in recent_images:
+            if isinstance(item, dict) and item.get("encoded_image"):
+                combined.append(item)
+                if len(combined) >= 3:  # Limit to 3 recent images if no semantic matches
+                    break
+    
+    return combined if combined else None
+
+
+# Helper function to safely extract answer from OpenAI response
+@pxt.udf
+def extract_openai_answer(response: dict) -> str:
+    """Safely extracts the answer text from an OpenAI chat completion response."""
+    if not response:
+        return "Error: No response from OpenAI (response is None or empty)."
+    
+    # Check for API errors in the response
+    if 'error' in response:
+        error_info = response['error']
+        error_msg = error_info.get('message', 'Unknown error') if isinstance(error_info, dict) else str(error_info)
+        error_type = error_info.get('type', 'Unknown') if isinstance(error_info, dict) else 'Unknown'
+        return f"Error from OpenAI API ({error_type}): {error_msg}"
+    
+    if 'choices' not in response or len(response['choices']) == 0:
+        # Log the full response for debugging (but don't include it in the user-facing error)
+        print(f"OpenAI response missing choices. Response keys: {list(response.keys())}")
+        return "Error: No choices in OpenAI response. The API may have encountered an issue."
+    
+    choice = response['choices'][0]
+    message = choice.get('message', {})
+    
+    # Check finish_reason to understand why content might be empty
+    finish_reason = choice.get('finish_reason')
+    
+    # Get content first to check if it exists
+    content = message.get('content')
+    
+    # Handle tool_calls finish_reason - this shouldn't happen in final response
+    # but we need to handle it gracefully
+    if finish_reason == 'tool_calls':
+        tool_calls = message.get('tool_calls', [])
+        print(f"OpenAI finish_reason: tool_calls. Tool calls count: {len(tool_calls)}")
+        if tool_calls:
+            tool_names = [tc.get('function', {}).get('name', 'unknown') for tc in tool_calls]
+            print(f"OpenAI attempted to call tools: {tool_names}")
+        
+        # Check if there's any content before the tool call
+        if content is not None and str(content).strip():
+            # Return the partial content if it exists
+            return str(content).strip()
+        else:
+            # No content available - this means the model tried to use tools when it should analyze images directly
+            # Provide a helpful error message that suggests the issue
+            return "Error: The model attempted to use tools instead of analyzing the image directly. This may indicate that images were not properly passed to the model, or the model configuration needs adjustment. Please ensure images are uploaded and try again."
+    
+    if finish_reason and finish_reason != 'stop':
+        reason_msg = {
+            'length': 'Response was cut off due to token limit.',
+            'content_filter': 'Response was filtered by content policy.',
+            'function_call': 'Model requested a function call.',
+        }.get(finish_reason, f'Response finished with reason: {finish_reason}')
+        print(f"OpenAI finish_reason: {finish_reason}")
+    
+    if content is None:
+        # Provide more context about why content is None
+        if finish_reason == 'content_filter':
+            return "Error: Response was filtered by OpenAI's content policy. Please try rephrasing your query."
+        elif finish_reason == 'length':
+            return "Error: Response was truncated due to token limit. The answer may be incomplete."
+        else:
+            print(f"OpenAI response has None content. Finish reason: {finish_reason}, Message keys: {list(message.keys())}")
+            return f"Error: Empty response from OpenAI (finish_reason: {finish_reason or 'unknown'})."
+    
+    content_str = str(content) if content else ""
+    if not content_str.strip():
+        return "Error: Empty content in OpenAI response."
+    
+    return content_str

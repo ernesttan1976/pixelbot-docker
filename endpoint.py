@@ -26,7 +26,7 @@ from flask import (
     url_for,
     make_response,
     g,
-    session # Add session
+    session,  # Add session
 )
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -35,14 +35,14 @@ import pixeltable as pxt
 from waitress import serve
 from werkzeug.utils import secure_filename
 import workos
-from workos import WorkOSClient # Import WorkOSClient class
+from workos import WorkOSClient  # Import WorkOSClient class
 
 # Local application imports
 import functions
 import config
 
 # Load environment variables
-load_dotenv(override=True) # Force override of existing OS vars
+load_dotenv(override=True)  # Force override of existing OS vars
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -55,7 +55,12 @@ WORKOS_COOKIE_PASSWORD = os.environ.get("WORKOS_COOKIE_PASSWORD")
 
 # Initialize WorkOS Client
 workos_client = None
-if WORKOS_API_KEY and WORKOS_CLIENT_ID and WORKOS_REDIRECT_URI and WORKOS_COOKIE_PASSWORD:
+if (
+    WORKOS_API_KEY
+    and WORKOS_CLIENT_ID
+    and WORKOS_REDIRECT_URI
+    and WORKOS_COOKIE_PASSWORD
+):
     try:
         # Use WorkOSClient class directly
         workos_client = WorkOSClient(api_key=WORKOS_API_KEY, client_id=WORKOS_CLIENT_ID)
@@ -63,32 +68,48 @@ if WORKOS_API_KEY and WORKOS_CLIENT_ID and WORKOS_REDIRECT_URI and WORKOS_COOKIE
     except Exception as e:
         app.logger.error(f"Failed to initialize WorkOS Client: {e}", exc_info=True)
 else:
-    app.logger.warning("WorkOS environment variables (including COOKIE_PASSWORD) not fully configured. Authentication will fail.")
+    app.logger.warning(
+        "WorkOS environment variables (including COOKIE_PASSWORD) not fully configured. Authentication will fail."
+    )
 # --- End WorkOS Configuration ---
+
 
 # --- Login Decorator ---
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         # Check if running in local auth mode
-        if os.environ.get('AUTH_MODE') == 'local':
+        if os.environ.get("AUTH_MODE") == "local":
             # In local mode, set a default user and bypass WorkOS
             # You can customize the default user details as needed
-            g.user = type('MockUser', (), {'id': 'local_user', 'email': 'local@example.com', 'first_name': 'Local', 'last_name': 'User'})() # Simple mock object
-            g.user_id = 'local_user'
-            app.logger.debug(f"Running in AUTH_MODE=local, using default user {g.user_id}")
+            g.user = type(
+                "MockUser",
+                (),
+                {
+                    "id": "local_user",
+                    "email": "local@example.com",
+                    "first_name": "Local",
+                    "last_name": "User",
+                },
+            )()  # Simple mock object
+            g.user_id = "local_user"
+            app.logger.debug(
+                f"Running in AUTH_MODE=local, using default user {g.user_id}"
+            )
             return f(*args, **kwargs)
 
         # --- Existing WorkOS Authentication Logic ---
         # Ensure WorkOS client and cookie password are available
         if not workos_client or not WORKOS_COOKIE_PASSWORD:
-            app.logger.error("WorkOS Client or Cookie Password not configured for login check.")
+            app.logger.error(
+                "WorkOS Client or Cookie Password not configured for login check."
+            )
             return jsonify({"error": "Authentication configuration error"}), 500
 
         sealed_session_cookie = request.cookies.get("wos_session")
         if not sealed_session_cookie:
             app.logger.info("No session cookie found, redirecting to login.")
-            return redirect(url_for("login")) # Redirect to login if no cookie
+            return redirect(url_for("login"))  # Redirect to login if no cookie
 
         try:
             # Load and authenticate the session from the cookie
@@ -102,24 +123,32 @@ def login_required(f):
                 # Store user info in Flask's request context global `g`
                 g.user = auth_response.user
                 g.user_id = auth_response.user.id
-                app.logger.debug(f"User {g.user.email} authenticated, ID {g.user_id} stored in g.")
+                app.logger.debug(
+                    f"User {g.user.email} authenticated, ID {g.user_id} stored in g."
+                )
                 return f(*args, **kwargs)
             else:
                 # Session exists but is not authenticated (e.g., expired, needs refresh)
-                app.logger.info(f"Session found but not authenticated (Reason: {auth_response.reason}), redirecting to login.")
+                app.logger.info(
+                    f"Session found but not authenticated (Reason: {auth_response.reason}), redirecting to login."
+                )
                 # For simplicity, redirect to login. Could implement refresh token logic here.
                 response = make_response(redirect(url_for("login")))
-                response.delete_cookie("wos_session") # Clear invalid cookie
+                response.delete_cookie("wos_session")  # Clear invalid cookie
                 return response
 
         except Exception as e:
             # Handle errors loading/authenticating the session (e.g., invalid cookie, password mismatch)
-            app.logger.error(f"Error authenticating session cookie: {str(e)}", exc_info=True)
+            app.logger.error(
+                f"Error authenticating session cookie: {str(e)}", exc_info=True
+            )
             response = make_response(redirect(url_for("login")))
-            response.delete_cookie("wos_session") # Clear potentially corrupt cookie
+            response.delete_cookie("wos_session")  # Clear potentially corrupt cookie
             return response
 
     return decorated_function
+
+
 # --- End Login Decorator ---
 
 # Initialize Limiter for rate limiting
@@ -260,12 +289,17 @@ def home():
     display_name = None
 
     # Handle local authentication mode
-    if os.environ.get('AUTH_MODE') == 'local':
+    if os.environ.get("AUTH_MODE") == "local":
         app.logger.debug("Home: Running in AUTH_MODE=local.")
         is_authenticated = True
         display_name = "Local User"
         # Create a mock user profile consistent with login_required
-        user_profile = {'id': 'local_user', 'email': 'local@example.com', 'first_name': 'Local', 'last_name': 'User'}
+        user_profile = {
+            "id": "local_user",
+            "email": "local@example.com",
+            "first_name": "Local",
+            "last_name": "User",
+        }
     else:
         # Handle standard WorkOS session check
         app.logger.debug("Home: Checking for WorkOS session.")
@@ -283,25 +317,36 @@ def home():
                         is_authenticated = True
                         # Access attributes directly from auth_response.user
                         user = auth_response.user
-                        user_profile = {"id": user.id, "email": user.email, "first_name": user.first_name, "last_name": user.last_name} # Create dict manually if needed
-                        display_name = user.first_name or user.email or 'User'
+                        user_profile = {
+                            "id": user.id,
+                            "email": user.email,
+                            "first_name": user.first_name,
+                            "last_name": user.last_name,
+                        }  # Create dict manually if needed
+                        display_name = user.first_name or user.email or "User"
                     else:
-                         app.logger.debug(f"Home: Session found but not authenticated (Reason: {auth_response.reason})")
-                         # Optionally delete invalid cookie here if needed
+                        app.logger.debug(
+                            f"Home: Session found but not authenticated (Reason: {auth_response.reason})"
+                        )
+                        # Optionally delete invalid cookie here if needed
                 except Exception as e:
-                    app.logger.warning(f"Home: Error validating session cookie: {str(e)}")
+                    app.logger.warning(
+                        f"Home: Error validating session cookie: {str(e)}"
+                    )
                     # Optionally delete invalid cookie here if needed
 
     # Render the template with the determined authentication status
     try:
         return render_template(
             "index.html",
-            user=user_profile, # Pass the full profile if needed elsewhere
+            user=user_profile,  # Pass the full profile if needed elsewhere
             is_authenticated=is_authenticated,
-            display_name=display_name # Pass display_name (will be 'Local User' or from WorkOS)
+            display_name=display_name,  # Pass display_name (will be 'Local User' or from WorkOS)
         )
     except Exception as e:
-        app.logger.error(f"Error rendering home page: {str(e)}", exc_info=True) # Added exc_info
+        app.logger.error(
+            f"Error rendering home page: {str(e)}", exc_info=True
+        )  # Added exc_info
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -309,26 +354,31 @@ def home():
 def login():
     """Redirect the user to WorkOS AuthKit or handle local mode."""
     # If in local auth mode, just redirect home (user is implicitly logged in)
-    if os.environ.get('AUTH_MODE') == 'local':
+    if os.environ.get("AUTH_MODE") == "local":
         app.logger.info("AUTH_MODE=local: Skipping WorkOS login, redirecting home.")
         return redirect(url_for("home"))
 
     # --- Existing WorkOS Login Logic ---
     if not workos_client or not WORKOS_REDIRECT_URI:
-        app.logger.error("WorkOS Client or Redirect URI not initialized. Check configuration.")
+        app.logger.error(
+            "WorkOS Client or Redirect URI not initialized. Check configuration."
+        )
         return jsonify({"error": "Authentication configuration error"}), 500
 
     try:
         # Generate the AuthKit authorization URL
         authorization_url = workos_client.user_management.get_authorization_url(
-            provider="authkit", # Specify AuthKit provider
+            provider="authkit",  # Specify AuthKit provider
             redirect_uri=WORKOS_REDIRECT_URI,
-            state={}, # Optional state parameters
+            state={},  # Optional state parameters
         )
         app.logger.info("Redirecting to WorkOS AuthKit for authentication.")
         return redirect(authorization_url)
     except Exception as e:
-        app.logger.error(f"Error generating WorkOS AuthKit authorization URL: {str(e)}", exc_info=True)
+        app.logger.error(
+            f"Error generating WorkOS AuthKit authorization URL: {str(e)}",
+            exc_info=True,
+        )
         return jsonify({"error": "Authentication failed"}), 500
 
 
@@ -336,13 +386,17 @@ def login():
 def auth_callback():
     """Handle the callback from WorkOS AuthKit or handle local mode."""
     # If in local auth mode, this route shouldn't be hit, but redirect home if it is.
-    if os.environ.get('AUTH_MODE') == 'local':
-        app.logger.warning("AUTH_MODE=local: /auth/callback accessed unexpectedly. Redirecting home.")
+    if os.environ.get("AUTH_MODE") == "local":
+        app.logger.warning(
+            "AUTH_MODE=local: /auth/callback accessed unexpectedly. Redirecting home."
+        )
         return redirect(url_for("home"))
 
     # --- Existing WorkOS Callback Logic ---
     if not workos_client or not WORKOS_COOKIE_PASSWORD:
-        app.logger.error("WorkOS Client or Cookie Password not initialized. Cannot process callback.")
+        app.logger.error(
+            "WorkOS Client or Cookie Password not initialized. Cannot process callback."
+        )
         return redirect(url_for("home"))
 
     code = request.args.get("code")
@@ -350,7 +404,9 @@ def auth_callback():
     error_description = request.args.get("error_description")
 
     if error:
-        app.logger.error(f"WorkOS AuthKit authentication error: {error} - {error_description}")
+        app.logger.error(
+            f"WorkOS AuthKit authentication error: {error} - {error_description}"
+        )
         return redirect(url_for("home"))
 
     if not code:
@@ -364,38 +420,55 @@ def auth_callback():
             session={"seal_session": True, "cookie_password": WORKOS_COOKIE_PASSWORD},
         )
 
-        app.logger.info(f"User {auth_response.user.email} authenticated successfully via AuthKit. ID: {auth_response.user.id}")
+        app.logger.info(
+            f"User {auth_response.user.email} authenticated successfully via AuthKit. ID: {auth_response.user.id}"
+        )
 
         # --- Add Preset Personas for New Users --- #
         user_id = auth_response.user.id
         try:
             personas_table = pxt.get_table("agents.user_personas")
-            existing_count = personas_table.where(personas_table.user_id == user_id).count()
+            existing_count = personas_table.where(
+                personas_table.user_id == user_id
+            ).count()
 
             if existing_count == 0:
-                app.logger.info(f"First login for user {user_id}. Adding preset personas...")
+                app.logger.info(
+                    f"First login for user {user_id}. Adding preset personas..."
+                )
                 presets_to_insert = []
                 current_timestamp = datetime.now()
                 for name, data in config.PERSONA_PRESETS.items():
-                    presets_to_insert.append({
-                        "user_id": user_id,
-                        "persona_name": name,
-                        "initial_prompt": data["initial_prompt"],
-                        "final_prompt": data["final_prompt"],
-                        "llm_params": data["llm_params"],
-                        "timestamp": current_timestamp
-                    })
+                    presets_to_insert.append(
+                        {
+                            "user_id": user_id,
+                            "persona_name": name,
+                            "initial_prompt": data["initial_prompt"],
+                            "final_prompt": data["final_prompt"],
+                            "llm_params": data["llm_params"],
+                            "timestamp": current_timestamp,
+                        }
+                    )
 
                 if presets_to_insert:
                     insert_status = personas_table.insert(presets_to_insert)
-                    app.logger.info(f"Inserted {insert_status.num_rows} preset personas for user {user_id}.")
+                    app.logger.info(
+                        f"Inserted {insert_status.num_rows} preset personas for user {user_id}."
+                    )
                 else:
-                    app.logger.warning(f"No presets defined in config.PERSONA_PRESETS for user {user_id}.")
+                    app.logger.warning(
+                        f"No presets defined in config.PERSONA_PRESETS for user {user_id}."
+                    )
             else:
-                app.logger.debug(f"User {user_id} already has {existing_count} personas. Skipping preset insertion.")
+                app.logger.debug(
+                    f"User {user_id} already has {existing_count} personas. Skipping preset insertion."
+                )
 
         except Exception as persona_err:
-            app.logger.error(f"Error checking/adding preset personas for user {user_id}: {persona_err}", exc_info=True)
+            app.logger.error(
+                f"Error checking/adding preset personas for user {user_id}: {persona_err}",
+                exc_info=True,
+            )
             # Do not fail the login process, just log the error.
         # --- End Add Preset Personas --- #
 
@@ -405,18 +478,20 @@ def auth_callback():
         response.set_cookie(
             "wos_session",
             auth_response.sealed_session,
-            secure=False,       # Send only over HTTPS
-            httponly=True,     # Prevent client-side JS access
-            samesite="Lax",    # Mitigate CSRF
-            max_age=eight_hours_in_seconds, # Set cookie to expire in 8 hours
+            secure=False,  # Send only over HTTPS
+            httponly=True,  # Prevent client-side JS access
+            samesite="Lax",  # Mitigate CSRF
+            max_age=eight_hours_in_seconds,  # Set cookie to expire in 8 hours
         )
         return response
 
-    except workos.exceptions.BadRequestException as e: # Corrected exception type
-         app.logger.error(f"WorkOS AuthKit callback error (Bad Request): {e.message}")
-         return redirect(url_for("home"))
+    except workos.exceptions.BadRequestException as e:  # Corrected exception type
+        app.logger.error(f"WorkOS AuthKit callback error (Bad Request): {e.message}")
+        return redirect(url_for("home"))
     except Exception as e:
-        app.logger.error(f"Error processing WorkOS AuthKit callback: {str(e)}", exc_info=True)
+        app.logger.error(
+            f"Error processing WorkOS AuthKit callback: {str(e)}", exc_info=True
+        )
         return redirect(url_for("home"))
 
 
@@ -424,7 +499,7 @@ def auth_callback():
 def logout():
     """Log the user out using WorkOS AuthKit or clear local session."""
     # If in local auth mode, just clear the session cookie and redirect home
-    if os.environ.get('AUTH_MODE') == 'local':
+    if os.environ.get("AUTH_MODE") == "local":
         app.logger.info("AUTH_MODE=local: Clearing local session and redirecting home.")
         response = make_response(redirect(url_for("home")))
         # Even though we don't set 'wos_session' in local mode, clear it just in case
@@ -439,13 +514,13 @@ def logout():
         app.logger.error("WorkOS Client or Cookie Password not configured for logout.")
         # Redirect home even if config is missing, as we can't log out via WorkOS
         response = make_response(redirect(url_for("home")))
-        response.delete_cookie("wos_session") # Attempt to clear local cookie anyway
+        response.delete_cookie("wos_session")  # Attempt to clear local cookie anyway
         return response
 
     sealed_session_cookie = request.cookies.get("wos_session")
     if not sealed_session_cookie:
         app.logger.info("Logout attempted but no session cookie found.")
-        return redirect(url_for("home")) # Already logged out locally
+        return redirect(url_for("home"))  # Already logged out locally
 
     try:
         # Load the session to get the logout URL
@@ -463,7 +538,9 @@ def logout():
 
     except Exception as e:
         # Handle errors loading the session (e.g., invalid cookie)
-        app.logger.error(f"Error loading session cookie during logout: {str(e)}", exc_info=True)
+        app.logger.error(
+            f"Error loading session cookie during logout: {str(e)}", exc_info=True
+        )
         # Still try to clear the local cookie and redirect home
         response = make_response(redirect(url_for("home")))
         response.delete_cookie("wos_session")
@@ -476,18 +553,20 @@ def logout():
 def query():
     """Handle user queries, process them through the Pixeltable workflow, and return the answer."""
     query_text = request.form.get("query")
-    persona_id = request.form.get("persona_id") # This is the persona_name from the DB
+    persona_id = request.form.get("persona_id")  # This is the persona_name from the DB
     if not query_text:
         return jsonify({"error": "Query text is required"}), 400
 
     # Get user_id from request context (set by @login_required)
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /query")
         return jsonify({"error": "Authentication error"}), 500
 
     try:
-        app.logger.info(f"Processing query for user {user_id} with selected persona '{persona_id or 'DEFAULT'}': {query_text}")
+        app.logger.info(
+            f"Processing query for user {user_id} with selected persona '{persona_id or 'DEFAULT'}': {query_text}"
+        )
 
         # --- Determine Prompts and Parameters (Simplified Logic) --- #
         # 1. Initialize with global defaults
@@ -497,31 +576,45 @@ def query():
 
         # 2. If a persona_id (name) is provided, try to fetch it from the DB
         if persona_id:
-            app.logger.debug(f"Attempting to load persona '{persona_id}' from DB for user {user_id}")
+            app.logger.debug(
+                f"Attempting to load persona '{persona_id}' from DB for user {user_id}"
+            )
             try:
                 personas_table = pxt.get_table("agents.user_personas")
                 persona_result = (
-                    personas_table.where((personas_table.user_id == user_id) & (personas_table.persona_name == persona_id))
+                    personas_table.where(
+                        (personas_table.user_id == user_id)
+                        & (personas_table.persona_name == persona_id)
+                    )
                     # MODIFIED: Use explicit aliasing in select
                     .select(
                         initial_prompt=personas_table.initial_prompt,
                         final_prompt=personas_table.final_prompt,
-                        llm_params=personas_table.llm_params
+                        llm_params=personas_table.llm_params,
                     )
                     .collect()
                 )
                 if len(persona_result) > 0:
                     custom_data = persona_result[0]
-                    selected_initial_prompt = custom_data["initial_prompt"] # This should work now
+                    selected_initial_prompt = custom_data[
+                        "initial_prompt"
+                    ]  # This should work now
                     selected_final_prompt = custom_data["final_prompt"]
                     # Update params, keeping defaults for any missing keys in the stored params
                     selected_llm_params.update(custom_data.get("llm_params", {}))
-                    app.logger.info(f"Successfully loaded settings from persona '{persona_id}' for user {user_id}.")
+                    app.logger.info(
+                        f"Successfully loaded settings from persona '{persona_id}' for user {user_id}."
+                    )
                 else:
-                    app.logger.warning(f"Persona '{persona_id}' not found for user {user_id}. Falling back to default settings.")
+                    app.logger.warning(
+                        f"Persona '{persona_id}' not found for user {user_id}. Falling back to default settings."
+                    )
                     # Defaults already set, no action needed
             except Exception as db_err:
-                app.logger.error(f"Error fetching persona '{persona_id}': {db_err}. Falling back to default settings.", exc_info=True)
+                app.logger.error(
+                    f"Error fetching persona '{persona_id}': {db_err}. Falling back to default settings.",
+                    exc_info=True,
+                )
                 # Defaults already set
         else:
             app.logger.info("No persona selected, using default agent settings.")
@@ -540,20 +633,33 @@ def query():
                     "initial_system_prompt": selected_initial_prompt,
                     "final_system_prompt": selected_final_prompt,
                     # Use selected LLM params, ensuring all keys exist from defaults
-                    "max_tokens": selected_llm_params.get("max_tokens", config.DEFAULT_PARAMETERS["max_tokens"]),
-                    "stop_sequences": selected_llm_params.get("stop_sequences", config.DEFAULT_PARAMETERS["stop_sequences"]),
-                    "temperature": selected_llm_params.get("temperature", config.DEFAULT_PARAMETERS["temperature"]),
-                    "top_k": selected_llm_params.get("top_k", config.DEFAULT_PARAMETERS["top_k"]),
-                    "top_p": selected_llm_params.get("top_p", config.DEFAULT_PARAMETERS["top_p"]),
+                    "max_tokens": selected_llm_params.get(
+                        "max_tokens", config.DEFAULT_PARAMETERS["max_tokens"]
+                    ),
+                    "stop_sequences": selected_llm_params.get(
+                        "stop_sequences", config.DEFAULT_PARAMETERS["stop_sequences"]
+                    ),
+                    "temperature": selected_llm_params.get(
+                        "temperature", config.DEFAULT_PARAMETERS["temperature"]
+                    ),
+                    "top_k": selected_llm_params.get(
+                        "top_k", config.DEFAULT_PARAMETERS["top_k"]
+                    ),
+                    "top_p": selected_llm_params.get(
+                        "top_p", config.DEFAULT_PARAMETERS["top_p"]
+                    ),
                 }
             ]
         )
         app.logger.debug(f"Query inserted for user {user_id}. Waiting briefly...")
-        time.sleep(0.5) # Allow Pixeltable background computation
+        time.sleep(0.5)  # Allow Pixeltable background computation
 
         # Retrieve the computed results for this specific query using the timestamp and user_id
         result = (
-            tool_agent.where((tool_agent.timestamp == current_timestamp) & (tool_agent.user_id == user_id))
+            tool_agent.where(
+                (tool_agent.timestamp == current_timestamp)
+                & (tool_agent.user_id == user_id)
+            )
             .select(
                 tool_agent.answer,
                 tool_agent.doc_context,
@@ -634,7 +740,7 @@ def query():
                         "role": "user",
                         "content": query_text,
                         "timestamp": current_timestamp,
-                        "user_id": user_id, # Added user_id
+                        "user_id": user_id,  # Added user_id
                     }
                 ]
             )
@@ -647,7 +753,7 @@ def query():
                             "role": "assistant",
                             "content": answer,
                             "timestamp": datetime.now(),
-                            "user_id": user_id, # Added user_id
+                            "user_id": user_id,  # Added user_id
                         }
                     ]
                 )
@@ -659,7 +765,9 @@ def query():
                     f"Assistant answer not valid, not storing in history for user {user_id}. Answer: {answer}"
                 )
         except Exception as history_err:
-            app.logger.error(f"Error inserting into chat history for user {user_id}: {str(history_err)}")
+            app.logger.error(
+                f"Error inserting into chat history for user {user_id}: {str(history_err)}"
+            )
             # Continue without failing the main request, but log the error
 
         # Prepare metadata
@@ -674,8 +782,33 @@ def query():
         }
 
         # Extract the final answer
-        answer = result_data.get("answer", "Error: Answer not generated.")
-        app.logger.info(f"Query processed successfully, answer length: {len(answer)}")
+        answer = result_data.get("answer")
+        if answer is None:
+            answer = "Error: Empty response from OpenAI."
+            app.logger.warning(
+                f"Answer is None for user {user_id}. "
+                f"Query: '{query_text[:100]}...'. "
+                f"Checking final_response structure..."
+            )
+            # Try to get more details about the response
+            try:
+                final_response = result_data.get("final_response")
+                if final_response:
+                    app.logger.debug(
+                        f"Final response structure: {type(final_response)}, keys: {list(final_response.keys()) if isinstance(final_response, dict) else 'N/A'}"
+                    )
+            except Exception as e:
+                app.logger.debug(f"Could not inspect final_response: {e}")
+        elif not answer or answer.strip() == "":
+            answer = "Error: Empty response from OpenAI."
+            app.logger.warning(
+                f"Answer is empty for user {user_id}. Query: '{query_text[:100]}...'"
+            )
+        else:
+            app.logger.info(
+                f"Query processed successfully for user {user_id}, answer length: {len(answer) if answer else 0}"
+            )
+
         return jsonify(
             {
                 "answer": answer,
@@ -754,7 +887,14 @@ def upload_file():
         # Add file reference to the correct Pixeltable table
         table = get_pxt_table(table_key)
         table.insert(
-            [{data_col: file_path, "uuid": file_uuid, "timestamp": current_timestamp, "user_id": g.user_id}] # Added user_id
+            [
+                {
+                    data_col: file_path,
+                    "uuid": file_uuid,
+                    "timestamp": current_timestamp,
+                    "user_id": g.user_id,
+                }
+            ]  # Added user_id
         )
 
         app.logger.info(
@@ -843,7 +983,14 @@ def add_url():
         # Add URL reference to the correct Pixeltable table
         table = get_pxt_table(table_key)
         table.insert(
-            [{data_col: url, "uuid": file_uuid, "timestamp": current_timestamp, "user_id": g.user_id}] # Added user_id
+            [
+                {
+                    data_col: url,
+                    "uuid": file_uuid,
+                    "timestamp": current_timestamp,
+                    "user_id": g.user_id,
+                }
+            ]  # Added user_id
         )
 
         app.logger.info(
@@ -885,11 +1032,13 @@ def add_url():
 @limiter.limit("60 per minute")
 def get_workflow_detail(timestamp_str):
     """Fetch the full details for a specific workflow entry by timestamp, ensuring user ownership."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /workflow_detail")
         return jsonify({"error": "Authentication error"}), 500
-    app.logger.debug(f"Fetching details for workflow timestamp: {timestamp_str} for user {user_id}")
+    app.logger.debug(
+        f"Fetching details for workflow timestamp: {timestamp_str} for user {user_id}"
+    )
     try:
         # Attempt to parse the timestamp string
         try:
@@ -911,7 +1060,10 @@ def get_workflow_detail(timestamp_str):
 
         # Select relevant columns for the specific timestamp
         result_df = (
-            workflow_table.where((workflow_table.timestamp == target_timestamp) & (workflow_table.user_id == user_id)) # Added user_id filter
+            workflow_table.where(
+                (workflow_table.timestamp == target_timestamp)
+                & (workflow_table.user_id == user_id)
+            )  # Added user_id filter
             .select(
                 prompt=workflow_table.prompt,
                 timestamp=workflow_table.timestamp,
@@ -969,7 +1121,7 @@ def get_context_info():
     Get application context FOR THE CURRENT USER: available tools, documents, images, videos, audios,
     initial/final prompts, and parameters from config.
     """
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /context_info")
         return jsonify({"error": "Authentication error"}), 500
@@ -996,7 +1148,9 @@ def get_context_info():
         try:
             documents_table = get_pxt_table("document")
             docs_df = (
-                documents_table.where(documents_table.user_id == user_id) # Added user_id filter
+                documents_table.where(
+                    documents_table.user_id == user_id
+                )  # Added user_id filter
                 .select(
                     doc_source=documents_table.document, uuid_col=documents_table.uuid
                 )
@@ -1039,14 +1193,18 @@ def get_context_info():
 
                     document_list.append({"name": filename, "uuid": doc_uuid})
         except Exception as doc_err:
-            app.logger.error(f"Error fetching documents for user {user_id}: {str(doc_err)}")
+            app.logger.error(
+                f"Error fetching documents for user {user_id}: {str(doc_err)}"
+            )
 
         # 3. Get list of images for the user
         image_list = []
         try:
             images_table = get_pxt_table("image")
             imgs_df = (
-                images_table.where(images_table.user_id == user_id) # Added user_id filter
+                images_table.where(
+                    images_table.user_id == user_id
+                )  # Added user_id filter
                 .select(
                     img_source=images_table.image,
                     uuid_col=images_table.uuid,
@@ -1190,10 +1348,10 @@ def get_context_info():
 
             # Select videos AND their UUIDs from the main table
             vids_df = (
-                videos_table.where(videos_table.user_id == user_id) # Added user_id filter
-                .select(
-                    video_col=videos_table.video, uuid_col=videos_table.uuid
-                )
+                videos_table.where(
+                    videos_table.user_id == user_id
+                )  # Added user_id filter
+                .select(video_col=videos_table.video, uuid_col=videos_table.uuid)
                 .collect()
                 .to_pandas()
             )
@@ -1265,10 +1423,10 @@ def get_context_info():
         try:
             audios_table = get_pxt_table("audio")
             audio_df = (
-                audios_table.where(audios_table.user_id == user_id) # Added user_id filter
-                .select(
-                    audio_col=audios_table.audio, uuid_col=audios_table.uuid
-                )
+                audios_table.where(
+                    audios_table.user_id == user_id
+                )  # Added user_id filter
+                .select(audio_col=audios_table.audio, uuid_col=audios_table.uuid)
                 .collect()
                 .to_pandas()
             )
@@ -1315,7 +1473,9 @@ def get_context_info():
         try:
             workflow_table = pxt.get_table("agents.tools")
             wf_df = (
-                workflow_table.where(workflow_table.user_id == user_id) # Added user_id filter
+                workflow_table.where(
+                    workflow_table.user_id == user_id
+                )  # Added user_id filter
                 .select(
                     workflow_table.timestamp,
                     workflow_table.prompt,
@@ -1373,7 +1533,7 @@ def get_context_info():
 @limiter.limit("10 per hour")
 def delete_all():
     """Delete all items from the specified table type."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /delete_all")
         return jsonify({"error": "Authentication error"}), 500
@@ -1393,7 +1553,7 @@ def delete_all():
         app.logger.info(f"Attempting to delete all {file_type}s for user {user_id}")
 
         table = get_pxt_table(file_type)
-        status = table.delete(where=table.user_id == user_id) # Added user_id filter
+        status = table.delete(where=table.user_id == user_id)  # Added user_id filter
         deleted_count = status.num_rows
 
         app.logger.info(
@@ -1419,9 +1579,11 @@ def delete_all():
 @limiter.limit("30 per minute")
 def delete_history_entry(timestamp_str):
     """Delete a specific history entry based on its timestamp."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
-        app.logger.error("User ID not found in request context for /delete_history_entry")
+        app.logger.error(
+            "User ID not found in request context for /delete_history_entry"
+        )
         return jsonify({"error": "Authentication error"}), 500
 
     app.logger.info(
@@ -1449,7 +1611,8 @@ def delete_history_entry(timestamp_str):
 
         # Delete the row where the timestamp and user_id match
         status = workflow_table.delete(
-            where=(workflow_table.timestamp == target_timestamp) & (workflow_table.user_id == user_id) # Added user_id filter
+            where=(workflow_table.timestamp == target_timestamp)
+            & (workflow_table.user_id == user_id)  # Added user_id filter
         )
 
         num_deleted = status.num_rows
@@ -1469,7 +1632,10 @@ def delete_history_entry(timestamp_str):
                 f"No history entry found matching timestamp: {timestamp_str} for user {user_id}"
             )
             return jsonify(
-                {"message": "No entry found with that timestamp for this user", "num_deleted": 0}
+                {
+                    "message": "No entry found with that timestamp for this user",
+                    "num_deleted": 0,
+                }
             ), 404
 
     except Exception as e:
@@ -1485,7 +1651,7 @@ def delete_history_entry(timestamp_str):
 @limiter.limit("60 per minute")
 def save_memory():
     """Save a memory item (code or text) to the Pixeltable table."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /save_memory")
         return jsonify({"error": "Authentication error"}), 500
@@ -1530,7 +1696,7 @@ def save_memory():
                         "language": language,
                         "context_query": context_query,
                         "timestamp": current_timestamp,
-                        "user_id": user_id, # Added user_id
+                        "user_id": user_id,  # Added user_id
                     }
                 ]
             )
@@ -1560,7 +1726,7 @@ def save_memory():
 # @limiter.exempt # Temporarily remove to diagnose 404
 def get_memory():
     """Retrieve saved memory items, optionally filtering by search query."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /get_memory")
         return jsonify({"error": "Authentication error"}), 500
@@ -1595,7 +1761,9 @@ def get_memory():
         else:
             app.logger.info(f"Fetching all memory items for user {user_id}")
             query_result = (
-                memory_table.where(memory_table.user_id == user_id) # Keep user_id filter here
+                memory_table.where(
+                    memory_table.user_id == user_id
+                )  # Keep user_id filter here
                 .select(
                     content=memory_table.content,
                     type=memory_table.type,
@@ -1645,12 +1813,14 @@ def get_memory():
 @limiter.limit("60 per minute")
 def delete_memory(timestamp_str):
     """Delete a specific memory item based on its timestamp."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /delete_memory")
         return jsonify({"error": "Authentication error"}), 500
 
-    app.logger.info(f"Attempting to delete memory item with timestamp: {timestamp_str} for user {user_id}")
+    app.logger.info(
+        f"Attempting to delete memory item with timestamp: {timestamp_str} for user {user_id}"
+    )
     try:
         # Parse timestamp (expecting microseconds)
         try:
@@ -1666,7 +1836,10 @@ def delete_memory(timestamp_str):
             ), 400
 
         memory_table = pxt.get_table("agents.memory_bank")
-        status = memory_table.delete(where=(memory_table.timestamp == target_timestamp) & (memory_table.user_id == user_id)) # Added user_id filter
+        status = memory_table.delete(
+            where=(memory_table.timestamp == target_timestamp)
+            & (memory_table.user_id == user_id)
+        )  # Added user_id filter
         num_deleted = status.num_rows
 
         if num_deleted > 0:
@@ -1704,7 +1877,7 @@ def delete_memory(timestamp_str):
 def add_memory_manual():
     """Handle saving a memory item added manually via the Memory Bank tab."""
     # Get user_id from request context
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /add_memory_manual")
         return jsonify({"error": "Authentication error"}), 500
@@ -1743,7 +1916,7 @@ def add_memory_manual():
                         "language": language,
                         "context_query": context_query,
                         "timestamp": current_timestamp,
-                        "user_id": user_id, # Added user_id
+                        "user_id": user_id,  # Added user_id
                     }
                 ]
             )
@@ -1773,17 +1946,25 @@ def add_memory_manual():
 @limiter.exempt
 def download_chat_history():
     """Provides the entire chat history (from agents.tools) as a JSON file download."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
-        app.logger.error("User ID not found in request context for /download_chat_history")
+        app.logger.error(
+            "User ID not found in request context for /download_chat_history"
+        )
         return jsonify({"error": "Authentication error"}), 500
 
-    app.logger.info(f"Request received for downloading chat history for user {user_id}.")
+    app.logger.info(
+        f"Request received for downloading chat history for user {user_id}."
+    )
     try:
         workflow_table = pxt.get_table("agents.tools")
 
         # Fetch all columns for the specific user
-        query = workflow_table.where(workflow_table.user_id == user_id).order_by(workflow_table.timestamp, asc=False).collect() # Added user_id filter
+        query = (
+            workflow_table.where(workflow_table.user_id == user_id)
+            .order_by(workflow_table.timestamp, asc=False)
+            .collect()
+        )  # Added user_id filter
         # Removed specific select:
         # .select(
         #     timestamp=workflow_table.timestamp,
@@ -1831,7 +2012,7 @@ def download_chat_history():
 @limiter.exempt
 def download_memory():
     """Fetch all memory bank items and return as a JSON file."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /download_memory")
         return jsonify({"error": "Authentication error"}), 500
@@ -1841,18 +2022,24 @@ def download_memory():
         memory_table = pxt.get_table("agents.memory_bank")
 
         # Fetch all relevant data for the user, ordered by timestamp
-        query = memory_table.where(memory_table.user_id == user_id).select( # Added user_id filter
-            content=memory_table.content,
-            type=memory_table.type,
-            language=memory_table.language,
-            context_query=memory_table.context_query,
-            timestamp=memory_table.timestamp,
-        ).order_by(memory_table.timestamp, asc=True)
+        query = (
+            memory_table.where(memory_table.user_id == user_id)
+            .select(  # Added user_id filter
+                content=memory_table.content,
+                type=memory_table.type,
+                language=memory_table.language,
+                context_query=memory_table.context_query,
+                timestamp=memory_table.timestamp,
+            )
+            .order_by(memory_table.timestamp, asc=True)
+        )
 
         # Explicitly collect the entire result set
         memory_df = query.collect().to_pandas()
 
-        app.logger.info(f"Collected {len(memory_df)} entries for memory bank download for user {user_id}.")
+        app.logger.info(
+            f"Collected {len(memory_df)} entries for memory bank download for user {user_id}."
+        )
 
         if memory_df.empty:
             app.logger.warning("Memory bank is empty, returning empty JSON.")
@@ -1895,7 +2082,7 @@ def download_memory():
 def generate_image():
     """Handle image generation requests."""
     # Get user_id from request context
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /generate_image")
         return jsonify({"error": "Authentication error"}), 500
@@ -1913,7 +2100,13 @@ def generate_image():
 
         # Insert the new prompt with a timestamp and user_id
         image_gen_table.insert(
-            [{"prompt": prompt_text, "timestamp": current_timestamp, "user_id": user_id}] # Added user_id
+            [
+                {
+                    "prompt": prompt_text,
+                    "timestamp": current_timestamp,
+                    "user_id": user_id,
+                }
+            ]  # Added user_id
         )
         app.logger.debug(
             f"Image generation task inserted for user {user_id} with timestamp: {current_timestamp}"
@@ -1925,7 +2118,10 @@ def generate_image():
         result = None  # Initialize result to None
         while time.time() - start_time < max_wait_time:
             result_df = (
-                image_gen_table.where((image_gen_table.timestamp == current_timestamp) & (image_gen_table.user_id == user_id)) # Added user_id filter
+                image_gen_table.where(
+                    (image_gen_table.timestamp == current_timestamp)
+                    & (image_gen_table.user_id == user_id)
+                )  # Added user_id filter
                 .select(generated_image=image_gen_table.generated_image)
                 .collect()
             )
@@ -2017,7 +2213,7 @@ def generate_image():
 @limiter.limit("60 per minute")
 def get_image_history():
     """Fetch the history of generated images."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /image_history")
         return jsonify({"error": "Authentication error"}), 500
@@ -2041,7 +2237,9 @@ def get_image_history():
 
         # Fetch latest 50 for the user, ordered by timestamp
         query = (
-            image_gen_table.where(image_gen_table.user_id == user_id) # Added user_id filter
+            image_gen_table.where(
+                image_gen_table.user_id == user_id
+            )  # Added user_id filter
             .select(
                 prompt=image_gen_table.prompt,
                 timestamp=image_gen_table.timestamp,
@@ -2104,9 +2302,11 @@ def get_image_history():
 @limiter.limit("60 per minute")
 def delete_generated_image(timestamp_str):
     """Delete a specific generated image based on its timestamp."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
-        app.logger.error("User ID not found in request context for /delete_generated_image")
+        app.logger.error(
+            "User ID not found in request context for /delete_generated_image"
+        )
         return jsonify({"error": "Authentication error"}), 500
 
     app.logger.info(
@@ -2126,7 +2326,8 @@ def delete_generated_image(timestamp_str):
 
         image_gen_table = pxt.get_table("agents.image_generation_tasks")
         status = image_gen_table.delete(
-            where=(image_gen_table.timestamp == target_timestamp) & (image_gen_table.user_id == user_id) # Added user_id filter
+            where=(image_gen_table.timestamp == target_timestamp)
+            & (image_gen_table.user_id == user_id)  # Added user_id filter
         )
         num_deleted = status.num_rows
 
@@ -2145,7 +2346,10 @@ def delete_generated_image(timestamp_str):
                 f"No generated image found matching timestamp: {timestamp_str} for user {user_id}"
             )
             return jsonify(
-                {"message": "No image found with that timestamp for this user", "num_deleted": 0}
+                {
+                    "message": "No image found with that timestamp for this user",
+                    "num_deleted": 0,
+                }
             ), 404
 
     except Exception as e:
@@ -2159,12 +2363,14 @@ def delete_generated_image(timestamp_str):
 @limiter.limit("60 per minute")
 def delete_file_by_uuid(uuid, file_type):
     """Delete a file from the filesystem and its entry from the corresponding table based on UUID."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         app.logger.error("User ID not found in request context for /delete_file")
         return jsonify({"error": "Authentication error"}), 500
 
-    app.logger.info(f"Attempting to delete {file_type} file with UUID: {uuid} for user {user_id}")
+    app.logger.info(
+        f"Attempting to delete {file_type} file with UUID: {uuid} for user {user_id}"
+    )
     file_path_to_delete = None
     db_deleted = False
     file_deleted = False
@@ -2201,7 +2407,9 @@ def delete_file_by_uuid(uuid, file_type):
         try:
             # Use getattr to dynamically access the column
             record = (
-                table.where((table.uuid == uuid) & (table.user_id == user_id)) # Added user_id filter
+                table.where(
+                    (table.uuid == uuid) & (table.user_id == user_id)
+                )  # Added user_id filter
                 .select(file_source=getattr(table, data_col))
                 .collect()
             )
@@ -2248,7 +2456,9 @@ def delete_file_by_uuid(uuid, file_type):
             # Continue to try DB deletion, but log this error
 
         # 2. Perform the database delete operation
-        status = table.delete(where=(table.uuid == uuid) & (table.user_id == user_id)) # Added user_id filter
+        status = table.delete(
+            where=(table.uuid == uuid) & (table.user_id == user_id)
+        )  # Added user_id filter
         num_deleted = status.num_rows
         db_deleted = num_deleted > 0
 
@@ -2343,12 +2553,13 @@ def internal_error(error):
 
 # --- User Persona Endpoints --- #
 
+
 @app.route("/user_personas", methods=["GET"])
 @login_required
 @limiter.limit("60 per minute")
 def get_user_personas():
     """Fetch all personas saved by the currently logged-in user."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         return jsonify({"error": "Authentication error"}), 500
 
@@ -2375,31 +2586,44 @@ def get_user_personas():
         results_pd = personas_df.to_pandas()
         # Format timestamp for JSON
         if "timestamp" in results_pd.columns:
-            results_pd["timestamp"] = results_pd["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+            results_pd["timestamp"] = results_pd["timestamp"].dt.strftime(
+                "%Y-%m-%d %H:%M:%S.%f"
+            )
 
         persona_data = results_pd.to_dict("records")
-        app.logger.debug(f"Successfully retrieved {len(persona_data)} personas for user {user_id}")
+        app.logger.debug(
+            f"Successfully retrieved {len(persona_data)} personas for user {user_id}"
+        )
         return jsonify(persona_data)
 
     except pxt.Error as pxt_err:
-        app.logger.error(f"Pixeltable error fetching personas for user {user_id}: {pxt_err}", exc_info=True)
+        app.logger.error(
+            f"Pixeltable error fetching personas for user {user_id}: {pxt_err}",
+            exc_info=True,
+        )
         return jsonify({"error": "Server error fetching personas"}), 500
     except Exception as e:
-        app.logger.error(f"Unexpected error fetching personas for user {user_id}: {e}", exc_info=True)
+        app.logger.error(
+            f"Unexpected error fetching personas for user {user_id}: {e}", exc_info=True
+        )
         return jsonify({"error": "Internal server error"}), 500
+
 
 @app.route("/save_persona", methods=["POST"])
 @login_required
 @limiter.limit("30 per minute")
 def save_user_persona():
-    """Save (create) a new persona for the currently logged-in user.""" # Modified docstring
-    user_id = getattr(g, 'user_id', None)
+    """Save (create) a new persona for the currently logged-in user."""  # Modified docstring
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         return jsonify({"error": "Authentication error"}), 500
 
     try:
         data = request.get_json()
-        if not data or not all(k in data for k in ["persona_name", "initial_prompt", "final_prompt", "llm_params"]):
+        if not data or not all(
+            k in data
+            for k in ["persona_name", "initial_prompt", "final_prompt", "llm_params"]
+        ):
             return jsonify({"error": "Missing required persona fields"}), 400
 
         persona_name = data["persona_name"].strip()
@@ -2409,10 +2633,12 @@ def save_user_persona():
         current_timestamp = datetime.now()
 
         if not persona_name:
-             return jsonify({"error": "Persona name cannot be empty"}), 400
+            return jsonify({"error": "Persona name cannot be empty"}), 400
         # TODO: Add more robust validation for llm_params structure/values if needed
 
-        app.logger.info(f"Attempting to insert new persona '{persona_name}' for user {user_id}")
+        app.logger.info(
+            f"Attempting to insert new persona '{persona_name}' for user {user_id}"
+        )
 
         personas_table = pxt.get_table("agents.user_personas")
         # --- MODIFIED: Use insert instead of update --- #
@@ -2429,22 +2655,34 @@ def save_user_persona():
                     }
                 ]
             )
-            num_inserted = status.num_rows # insert returns num_rows inserted
+            num_inserted = status.num_rows  # insert returns num_rows inserted
 
             if num_inserted > 0:
-                 app.logger.info(f"Persona '{persona_name}' created successfully for user {user_id}.")
-                 return jsonify({"message": f"Persona '{persona_name}' created successfully."}), 201 # Use 201 Created status
+                app.logger.info(
+                    f"Persona '{persona_name}' created successfully for user {user_id}."
+                )
+                return jsonify(
+                    {"message": f"Persona '{persona_name}' created successfully."}
+                ), 201  # Use 201 Created status
             else:
                 # Should not happen if insert didn't raise error, but handle defensively
-                app.logger.warning(f"Persona '{persona_name}' insert operation reported 0 inserts for user {user_id}.")
+                app.logger.warning(
+                    f"Persona '{persona_name}' insert operation reported 0 inserts for user {user_id}."
+                )
                 return jsonify({"error": "Persona creation failed unexpectedly."}), 500
 
         except Exception as insert_err:
             # Catch potential errors, especially primary key violations
             err_str = str(insert_err).lower()
             if "unique constraint" in err_str or "primary key constraint" in err_str:
-                 app.logger.warning(f"Failed to insert persona '{persona_name}' for user {user_id}: Name already exists.")
-                 return jsonify({"error": f"Persona name '{persona_name}' already exists. Please choose a different name."}), 409 # 409 Conflict
+                app.logger.warning(
+                    f"Failed to insert persona '{persona_name}' for user {user_id}: Name already exists."
+                )
+                return jsonify(
+                    {
+                        "error": f"Persona name '{persona_name}' already exists. Please choose a different name."
+                    }
+                ), 409  # 409 Conflict
             else:
                 # Re-raise other unexpected insertion errors
                 raise insert_err
@@ -2452,19 +2690,26 @@ def save_user_persona():
 
     except pxt.Error as pxt_err:
         # Catch errors getting the table
-        app.logger.error(f"Pixeltable error preparing to save persona '{data.get('persona_name', 'UNKNOWN')}' for user {user_id}: {pxt_err}", exc_info=True)
+        app.logger.error(
+            f"Pixeltable error preparing to save persona '{data.get('persona_name', 'UNKNOWN')}' for user {user_id}: {pxt_err}",
+            exc_info=True,
+        )
         return jsonify({"error": "Server error accessing persona data"}), 500
     except Exception as e:
         # Catch validation errors or other unexpected errors
-        app.logger.error(f"Unexpected error saving persona '{data.get('persona_name', 'UNKNOWN')}' for user {user_id}: {e}", exc_info=True)
+        app.logger.error(
+            f"Unexpected error saving persona '{data.get('persona_name', 'UNKNOWN')}' for user {user_id}: {e}",
+            exc_info=True,
+        )
         return jsonify({"error": "Internal server error"}), 500
+
 
 @app.route("/delete_persona/<path:persona_name>", methods=["DELETE"])
 @login_required
 @limiter.limit("30 per minute")
 def delete_user_persona(persona_name):
     """Delete a specific persona by name for the currently logged-in user."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         return jsonify({"error": "Authentication error"}), 500
 
@@ -2475,23 +2720,42 @@ def delete_user_persona(persona_name):
     try:
         personas_table = pxt.get_table("agents.user_personas")
         status = personas_table.delete(
-            where=(personas_table.user_id == user_id) & (personas_table.persona_name == persona_name)
+            where=(personas_table.user_id == user_id)
+            & (personas_table.persona_name == persona_name)
         )
 
         num_deleted = status.num_rows
         if num_deleted > 0:
-            app.logger.info(f"Successfully deleted persona '{persona_name}' for user {user_id}")
-            return jsonify({"message": f"Persona '{persona_name}' deleted successfully.", "num_deleted": num_deleted}), 200
+            app.logger.info(
+                f"Successfully deleted persona '{persona_name}' for user {user_id}"
+            )
+            return jsonify(
+                {
+                    "message": f"Persona '{persona_name}' deleted successfully.",
+                    "num_deleted": num_deleted,
+                }
+            ), 200
         else:
-            app.logger.warning(f"No persona named '{persona_name}' found for user {user_id} to delete.")
-            return jsonify({"message": "Persona not found for this user", "num_deleted": 0}), 404
+            app.logger.warning(
+                f"No persona named '{persona_name}' found for user {user_id} to delete."
+            )
+            return jsonify(
+                {"message": "Persona not found for this user", "num_deleted": 0}
+            ), 404
 
     except pxt.Error as pxt_err:
-        app.logger.error(f"Pixeltable error deleting persona '{persona_name}' for user {user_id}: {pxt_err}", exc_info=True)
+        app.logger.error(
+            f"Pixeltable error deleting persona '{persona_name}' for user {user_id}: {pxt_err}",
+            exc_info=True,
+        )
         return jsonify({"error": "Server error deleting persona"}), 500
     except Exception as e:
-        app.logger.error(f"Unexpected error deleting persona '{persona_name}' for user {user_id}: {e}", exc_info=True)
+        app.logger.error(
+            f"Unexpected error deleting persona '{persona_name}' for user {user_id}: {e}",
+            exc_info=True,
+        )
         return jsonify({"error": "Internal server error"}), 500
+
 
 # --- End User Persona Endpoints --- #
 
@@ -2502,7 +2766,7 @@ def delete_user_persona(persona_name):
 @limiter.limit("30 per minute")
 def update_user_persona(persona_name):
     """Update an existing persona for the currently logged-in user."""
-    user_id = getattr(g, 'user_id', None)
+    user_id = getattr(g, "user_id", None)
     if not user_id:
         return jsonify({"error": "Authentication error"}), 500
 
@@ -2512,17 +2776,23 @@ def update_user_persona(persona_name):
     try:
         data = request.get_json()
         # Ensure all necessary fields are present for update
-        if not data or not all(k in data for k in ["initial_prompt", "final_prompt", "llm_params"]):
-             # We don't strictly need persona_name in the body if it's in the URL and we prevent renaming
-            return jsonify({"error": "Missing required persona fields in request body"}), 400
+        if not data or not all(
+            k in data for k in ["initial_prompt", "final_prompt", "llm_params"]
+        ):
+            # We don't strictly need persona_name in the body if it's in the URL and we prevent renaming
+            return jsonify(
+                {"error": "Missing required persona fields in request body"}
+            ), 400
 
         # Extract data (we won't use persona_name from body to prevent accidental renaming here)
         initial_prompt = data["initial_prompt"]
         final_prompt = data["final_prompt"]
         llm_params = data["llm_params"]
-        current_timestamp = datetime.now() # Update timestamp on modification
+        current_timestamp = datetime.now()  # Update timestamp on modification
 
-        app.logger.info(f"Attempting to update persona '{persona_name}' for user {user_id}")
+        app.logger.info(
+            f"Attempting to update persona '{persona_name}' for user {user_id}"
+        )
 
         personas_table = pxt.get_table("agents.user_personas")
 
@@ -2531,32 +2801,51 @@ def update_user_persona(persona_name):
             "initial_prompt": initial_prompt,
             "final_prompt": final_prompt,
             "llm_params": llm_params,
-            "timestamp": current_timestamp # Update the timestamp
+            "timestamp": current_timestamp,  # Update the timestamp
         }
 
         # Define the where clause
-        where_clause = (personas_table.user_id == user_id) & (personas_table.persona_name == persona_name)
+        where_clause = (personas_table.user_id == user_id) & (
+            personas_table.persona_name == persona_name
+        )
 
         # Perform the update
         status = personas_table.update(value_spec, where=where_clause)
-        num_updated = status.num_rows # update returns num_rows updated
+        num_updated = status.num_rows  # update returns num_rows updated
 
         if num_updated > 0:
-            app.logger.info(f"Persona '{persona_name}' updated successfully for user {user_id}.")
-            return jsonify({"message": f"Persona '{persona_name}' updated successfully.", "num_updated": num_updated}), 200
+            app.logger.info(
+                f"Persona '{persona_name}' updated successfully for user {user_id}."
+            )
+            return jsonify(
+                {
+                    "message": f"Persona '{persona_name}' updated successfully.",
+                    "num_updated": num_updated,
+                }
+            ), 200
         else:
             # This means the where clause didn't match any rows
-            app.logger.warning(f"No persona named '{persona_name}' found for user {user_id} to update.")
+            app.logger.warning(
+                f"No persona named '{persona_name}' found for user {user_id} to update."
+            )
             return jsonify({"error": "Persona not found for this user"}), 404
 
     except pxt.Error as pxt_err:
         # Catch Pixeltable errors (e.g., table access)
-        app.logger.error(f"Pixeltable error updating persona '{persona_name}' for user {user_id}: {pxt_err}", exc_info=True)
+        app.logger.error(
+            f"Pixeltable error updating persona '{persona_name}' for user {user_id}: {pxt_err}",
+            exc_info=True,
+        )
         return jsonify({"error": "Server error updating persona data"}), 500
     except Exception as e:
         # Catch JSON parsing errors or other unexpected errors
-        app.logger.error(f"Unexpected error updating persona '{persona_name}' for user {user_id}: {e}", exc_info=True)
+        app.logger.error(
+            f"Unexpected error updating persona '{persona_name}' for user {user_id}: {e}",
+            exc_info=True,
+        )
         return jsonify({"error": "Internal server error"}), 500
+
+
 # --- End Update Persona Endpoint --- #
 
 
@@ -2568,6 +2857,6 @@ if __name__ == "__main__":
 
     # Run using Waitress, a production-quality WSGI server
     app.logger.info(
-        "Starting Waitress production server on http://0.0.0.0:5000/..." # Corrected port
+        "Starting Waitress production server on http://0.0.0.0:5001/..."  # Corrected port
     )
-    serve(app, host="0.0.0.0", port=5000, threads=4) # Corrected port
+    serve(app, host="0.0.0.0", port=5001, threads=4)  # Corrected port

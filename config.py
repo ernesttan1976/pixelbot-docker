@@ -5,12 +5,16 @@
 EMBEDDING_MODEL_ID = "intfloat/multilingual-e5-large-instruct"
 # Vision-language model for image/frame semantic search
 CLIP_MODEL_ID = "openai/clip-vit-base-patch32"
+# Image search similarity threshold (0.0 to 1.0)
+# Higher values = more selective (fewer but more relevant results)
+# Lower values = less selective (more results but may include irrelevant ones)
+IMAGE_SEARCH_SIMILARITY_THRESHOLD = 0.35
 # Audio transcription model
 WHISPER_MODEL_ID = "whisper-1"
 # Image generation model
 DALLE_MODEL_ID = "dall-e-3"
 # Main reasoning LLM (tool use, final answer)
-CLAUDE_MODEL_ID = "claude-3-5-sonnet-latest"
+OPENAI_MODEL_ID = "gpt-4o-mini"
 # Follow-up question LLM
 MISTRAL_MODEL_ID = "mistral-small-latest"
 
@@ -18,7 +22,7 @@ MISTRAL_MODEL_ID = "mistral-small-latest"
 # Initial prompt for tool selection/analysis
 INITIAL_SYSTEM_PROMPT = """Identify the best tool(s) to answer the user's query based on the available data sources (documents, images, news, financial data)."""
 # Final prompt for synthesizing the answer
-FINAL_SYSTEM_PROMPT = """Based on the provided context and the user's query, provide a very concise answer, ideally just a few words."""
+FINAL_SYSTEM_PROMPT = """Based on the provided context and the user's query, provide a clear and detailed answer. If images are provided, analyze them directly and describe what you see. Do not use tools - provide your answer directly."""
 
 # --- Default LLM Parameters ---
 # Set to None to use the underlying API defaults
