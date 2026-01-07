@@ -1485,11 +1485,18 @@ def get_context_info():
                 .collect()
                 .to_pandas()
             )
-            if "timestamp" in wf_df.columns:
-                # Include microseconds for accurate matching later
-                wf_df["timestamp"] = wf_df["timestamp"].dt.strftime(
-                    "%Y-%m-%d %H:%M:%S.%f"
-                )
+            if "timestamp" in wf_df.columns and len(wf_df) > 0:
+                # Check if timestamp column is datetime-like before using .dt accessor
+                try:
+                    # Try to use .dt accessor - will fail if not datetime-like
+                    wf_df["timestamp"] = wf_df["timestamp"].dt.strftime(
+                        "%Y-%m-%d %H:%M:%S.%f"
+                    )
+                except (AttributeError, TypeError):
+                    # Column is not datetime-like (might be string or None), leave as is
+                    app.logger.debug(
+                        f"Timestamp column is not datetime-like, dtype: {wf_df['timestamp'].dtype}"
+                    )
             workflow_data = wf_df.to_dict("records")
         except Exception as wf_err:
             app.logger.error(f"Error fetching workflow data: {str(wf_err)}")
@@ -1783,10 +1790,16 @@ def get_memory():
         results_df = query_result.to_pandas()
 
         # Format timestamp consistently
-        if "timestamp" in results_df.columns:
-            results_df["timestamp"] = results_df["timestamp"].dt.strftime(
-                "%Y-%m-%d %H:%M:%S.%f"
-            )
+        if "timestamp" in results_df.columns and len(results_df) > 0:
+            try:
+                results_df["timestamp"] = results_df["timestamp"].dt.strftime(
+                    "%Y-%m-%d %H:%M:%S.%f"
+                )
+            except (AttributeError, TypeError):
+                # Column is not datetime-like, leave as is
+                app.logger.debug(
+                    f"Timestamp column is not datetime-like, dtype: {results_df['timestamp'].dtype}"
+                )
 
         memory_data = results_df.to_dict("records")
         app.logger.debug(
@@ -2046,10 +2059,16 @@ def download_memory():
             memory_data = []
         else:
             # Format timestamp for readability in JSON
-            if "timestamp" in memory_df.columns:
-                memory_df["timestamp"] = memory_df["timestamp"].dt.strftime(
-                    "%Y-%m-%d %H:%M:%S.%f"
-                )
+            if "timestamp" in memory_df.columns and len(memory_df) > 0:
+                try:
+                    memory_df["timestamp"] = memory_df["timestamp"].dt.strftime(
+                        "%Y-%m-%d %H:%M:%S.%f"
+                    )
+                except (AttributeError, TypeError):
+                    # Column is not datetime-like, leave as is
+                    app.logger.debug(
+                        f"Timestamp column is not datetime-like, dtype: {memory_df['timestamp'].dtype}"
+                    )
             memory_data = memory_df.to_dict("records")
 
         # Prepare JSON data for download
@@ -2585,10 +2604,16 @@ def get_user_personas():
 
         results_pd = personas_df.to_pandas()
         # Format timestamp for JSON
-        if "timestamp" in results_pd.columns:
-            results_pd["timestamp"] = results_pd["timestamp"].dt.strftime(
-                "%Y-%m-%d %H:%M:%S.%f"
-            )
+        if "timestamp" in results_pd.columns and len(results_pd) > 0:
+            try:
+                results_pd["timestamp"] = results_pd["timestamp"].dt.strftime(
+                    "%Y-%m-%d %H:%M:%S.%f"
+                )
+            except (AttributeError, TypeError):
+                # Column is not datetime-like, leave as is
+                app.logger.debug(
+                    f"Timestamp column is not datetime-like, dtype: {results_pd['timestamp'].dtype}"
+                )
 
         persona_data = results_pd.to_dict("records")
         app.logger.debug(
