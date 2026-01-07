@@ -40,116 +40,29 @@ from workos import WorkOSClient  # Import WorkOSClient class
 # Local application imports
 import functions
 import config
+import auth
 
 # Load environment variables
 load_dotenv(override=True)  # Force override of existing OS vars
 
 # Initialize Flask app
 app = Flask(__name__)
+# Set secret key for sessions (required for Flask sessions)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
 
-# --- WorkOS Configuration ---
-WORKOS_API_KEY = os.environ.get("WORKOS_API_KEY")
-WORKOS_CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID")
-WORKOS_REDIRECT_URI = os.environ.get("WORKOS_REDIRECT_URI")
-WORKOS_COOKIE_PASSWORD = os.environ.get("WORKOS_COOKIE_PASSWORD")
+# --- Authentication Configuration ---
+# Use simple password + Gmail whitelist authentication
+# Set via environment variables:
+# - APP_PASSWORD: The password users need to enter
+# - WHITELISTED_EMAILS: Comma-separated list of Gmail addresses (e.g., "user1@gmail.com,user2@gmail.com")
+# - PASSWORD_HASH: Optional, if you want to provide a pre-hashed password instead of plain text
+# - FLASK_SECRET_KEY: Secret key for Flask sessions (auto-generated if not provided)
 
-# Initialize WorkOS Client
-workos_client = None
-if (
-    WORKOS_API_KEY
-    and WORKOS_CLIENT_ID
-    and WORKOS_REDIRECT_URI
-    and WORKOS_COOKIE_PASSWORD
-):
-    try:
-        # Use WorkOSClient class directly
-        workos_client = WorkOSClient(api_key=WORKOS_API_KEY, client_id=WORKOS_CLIENT_ID)
-        app.logger.info("WorkOS Client initialized successfully.")
-    except Exception as e:
-        app.logger.error(f"Failed to initialize WorkOS Client: {e}", exc_info=True)
-else:
-    app.logger.warning(
-        "WorkOS environment variables (including COOKIE_PASSWORD) not fully configured. Authentication will fail."
-    )
-# --- End WorkOS Configuration ---
+# Check if running in local auth mode (bypass authentication)
+AUTH_MODE = os.environ.get("AUTH_MODE", "")
 
-
-# --- Login Decorator ---
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Check if running in local auth mode
-        if os.environ.get("AUTH_MODE") == "local":
-            # In local mode, set a default user and bypass WorkOS
-            # You can customize the default user details as needed
-            g.user = type(
-                "MockUser",
-                (),
-                {
-                    "id": "local_user",
-                    "email": "local@example.com",
-                    "first_name": "Local",
-                    "last_name": "User",
-                },
-            )()  # Simple mock object
-            g.user_id = "local_user"
-            app.logger.debug(
-                f"Running in AUTH_MODE=local, using default user {g.user_id}"
-            )
-            return f(*args, **kwargs)
-
-        # --- Existing WorkOS Authentication Logic ---
-        # Ensure WorkOS client and cookie password are available
-        if not workos_client or not WORKOS_COOKIE_PASSWORD:
-            app.logger.error(
-                "WorkOS Client or Cookie Password not configured for login check."
-            )
-            return jsonify({"error": "Authentication configuration error"}), 500
-
-        sealed_session_cookie = request.cookies.get("wos_session")
-        if not sealed_session_cookie:
-            app.logger.info("No session cookie found, redirecting to login.")
-            return redirect(url_for("login"))  # Redirect to login if no cookie
-
-        try:
-            # Load and authenticate the session from the cookie
-            session_obj = workos_client.user_management.load_sealed_session(
-                sealed_session=sealed_session_cookie,
-                cookie_password=WORKOS_COOKIE_PASSWORD,
-            )
-            auth_response = session_obj.authenticate()
-
-            if auth_response.authenticated:
-                # Store user info in Flask's request context global `g`
-                g.user = auth_response.user
-                g.user_id = auth_response.user.id
-                app.logger.debug(
-                    f"User {g.user.email} authenticated, ID {g.user_id} stored in g."
-                )
-                return f(*args, **kwargs)
-            else:
-                # Session exists but is not authenticated (e.g., expired, needs refresh)
-                app.logger.info(
-                    f"Session found but not authenticated (Reason: {auth_response.reason}), redirecting to login."
-                )
-                # For simplicity, redirect to login. Could implement refresh token logic here.
-                response = make_response(redirect(url_for("login")))
-                response.delete_cookie("wos_session")  # Clear invalid cookie
-                return response
-
-        except Exception as e:
-            # Handle errors loading/authenticating the session (e.g., invalid cookie, password mismatch)
-            app.logger.error(
-                f"Error authenticating session cookie: {str(e)}", exc_info=True
-            )
-            response = make_response(redirect(url_for("login")))
-            response.delete_cookie("wos_session")  # Clear potentially corrupt cookie
-            return response
-
-    return decorated_function
-
-
-# --- End Login Decorator ---
+# Use auth module's login_required decorator
+login_required = auth.login_required
 
 # Initialize Limiter for rate limiting
 limiter = Limiter(
@@ -301,39 +214,16 @@ def home():
             "last_name": "User",
         }
     else:
-        # Handle standard WorkOS session check
-        app.logger.debug("Home: Checking for WorkOS session.")
-        # Check for WorkOS session only if client and password are configured
-        if workos_client and WORKOS_COOKIE_PASSWORD:
-            sealed_session_cookie = request.cookies.get("wos_session")
-            if sealed_session_cookie:
-                try:
-                    session_obj = workos_client.user_management.load_sealed_session(
-                        sealed_session=sealed_session_cookie,
-                        cookie_password=WORKOS_COOKIE_PASSWORD,
-                    )
-                    auth_response = session_obj.authenticate()
-                    if auth_response.authenticated:
-                        is_authenticated = True
-                        # Access attributes directly from auth_response.user
-                        user = auth_response.user
-                        user_profile = {
-                            "id": user.id,
-                            "email": user.email,
-                            "first_name": user.first_name,
-                            "last_name": user.last_name,
-                        }  # Create dict manually if needed
-                        display_name = user.first_name or user.email or "User"
-                    else:
-                        app.logger.debug(
-                            f"Home: Session found but not authenticated (Reason: {auth_response.reason})"
-                        )
-                        # Optionally delete invalid cookie here if needed
-                except Exception as e:
-                    app.logger.warning(
-                        f"Home: Error validating session cookie: {str(e)}"
-                    )
-                    # Optionally delete invalid cookie here if needed
+        # Check simple password authentication
+        is_authenticated = auth.is_authenticated()
+        if is_authenticated:
+            display_name = "User"
+            user_profile = {
+                "id": "user",
+                "email": "user@example.com",
+                "first_name": "User",
+                "last_name": "",
+            }
 
     # Render the template with the determined authentication status
     try:
@@ -350,36 +240,95 @@ def home():
         return jsonify({"error": "Internal server error"}), 500
 
 
-@app.route("/login")
+@app.route("/login", methods=["GET", "POST"])
 def login():
-    """Redirect the user to WorkOS AuthKit or handle local mode."""
-    # If in local auth mode, just redirect home (user is implicitly logged in)
-    if os.environ.get("AUTH_MODE") == "local":
-        app.logger.info("AUTH_MODE=local: Skipping WorkOS login, redirecting home.")
+    """Simple password login page."""
+    # If already authenticated, redirect home
+    if auth.is_authenticated():
         return redirect(url_for("home"))
-
-    # --- Existing WorkOS Login Logic ---
-    if not workos_client or not WORKOS_REDIRECT_URI:
-        app.logger.error(
-            "WorkOS Client or Redirect URI not initialized. Check configuration."
-        )
-        return jsonify({"error": "Authentication configuration error"}), 500
-
-    try:
-        # Generate the AuthKit authorization URL
-        authorization_url = workos_client.user_management.get_authorization_url(
-            provider="authkit",  # Specify AuthKit provider
-            redirect_uri=WORKOS_REDIRECT_URI,
-            state={},  # Optional state parameters
-        )
-        app.logger.info("Redirecting to WorkOS AuthKit for authentication.")
-        return redirect(authorization_url)
-    except Exception as e:
-        app.logger.error(
-            f"Error generating WorkOS AuthKit authorization URL: {str(e)}",
-            exc_info=True,
-        )
-        return jsonify({"error": "Authentication failed"}), 500
+    
+    error = None
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        is_valid, message = auth.verify_password(password)
+        if is_valid:
+            auth.login_user()
+            app.logger.info("User logged in successfully.")
+            return redirect(url_for("home"))
+        else:
+            error = message
+            app.logger.warning("Login attempt failed.")
+    
+    # Render simple login form
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Login - Pixelbot</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+                margin: 0;
+                background: #f5f5f5;
+            }}
+            .login-container {{
+                background: white;
+                padding: 2rem;
+                border-radius: 8px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                width: 100%;
+                max-width: 400px;
+            }}
+            h1 {{
+                margin-top: 0;
+                color: #333;
+            }}
+            input[type="password"] {{
+                width: 100%;
+                padding: 0.75rem;
+                margin: 0.5rem 0 1rem 0;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 1rem;
+                box-sizing: border-box;
+            }}
+            button {{
+                width: 100%;
+                padding: 0.75rem;
+                background: #333;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-size: 1rem;
+                cursor: pointer;
+            }}
+            button:hover {{
+                background: #555;
+            }}
+            .error {{
+                color: #d32f2f;
+                margin-bottom: 1rem;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="login-container">
+            <h1>Login</h1>
+            {f'<div class="error">{error}</div>' if error else ''}
+            <form method="POST">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required autofocus>
+                <button type="submit">Login</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
 
 
 @app.route("/auth/callback")
@@ -497,54 +446,17 @@ def auth_callback():
 
 @app.route("/logout")
 def logout():
-    """Log the user out using WorkOS AuthKit or clear local session."""
-    # If in local auth mode, just clear the session cookie and redirect home
+    """Log the user out."""
+    # If in local auth mode, just clear the session and redirect home
     if os.environ.get("AUTH_MODE") == "local":
         app.logger.info("AUTH_MODE=local: Clearing local session and redirecting home.")
-        response = make_response(redirect(url_for("home")))
-        # Even though we don't set 'wos_session' in local mode, clear it just in case
-        response.delete_cookie("wos_session")
-        # Clear Flask's session if it was used to store the mock user
         session.clear()
-        return response
-
-    # --- Existing WorkOS Logout Logic ---
-    # Ensure WorkOS client and cookie password are available
-    if not workos_client or not WORKOS_COOKIE_PASSWORD:
-        app.logger.error("WorkOS Client or Cookie Password not configured for logout.")
-        # Redirect home even if config is missing, as we can't log out via WorkOS
-        response = make_response(redirect(url_for("home")))
-        response.delete_cookie("wos_session")  # Attempt to clear local cookie anyway
-        return response
-
-    sealed_session_cookie = request.cookies.get("wos_session")
-    if not sealed_session_cookie:
-        app.logger.info("Logout attempted but no session cookie found.")
-        return redirect(url_for("home"))  # Already logged out locally
-
-    try:
-        # Load the session to get the logout URL
-        session_obj = workos_client.user_management.load_sealed_session(
-            sealed_session=sealed_session_cookie,
-            cookie_password=WORKOS_COOKIE_PASSWORD,
-        )
-        logout_url = session_obj.get_logout_url()
-        app.logger.info("Redirecting user to WorkOS logout URL.")
-
-        # Create a response to redirect to WorkOS and delete the local cookie
-        response = make_response(redirect(logout_url))
-        response.delete_cookie("wos_session")
-        return response
-
-    except Exception as e:
-        # Handle errors loading the session (e.g., invalid cookie)
-        app.logger.error(
-            f"Error loading session cookie during logout: {str(e)}", exc_info=True
-        )
-        # Still try to clear the local cookie and redirect home
-        response = make_response(redirect(url_for("home")))
-        response.delete_cookie("wos_session")
-        return response
+        return redirect(url_for("home"))
+    
+    # Simple password auth logout
+    auth.logout_user()
+    app.logger.info("User logged out.")
+    return redirect(url_for("home"))
 
 
 @app.route("/query", methods=["POST"])
